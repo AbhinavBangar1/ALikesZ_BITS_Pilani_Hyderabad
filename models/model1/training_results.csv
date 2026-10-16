@@ -1,0 +1,4 @@
+horizon,val_rmse,val_mae,val_zone_a_pct,test_rmse,test_mae,test_zone_a_pct,best_iteration,n_features
+30min,14.145,10.349,90.87,14.811,10.158,90.63,340,134
+60min,26.756,20.202,70.14,27.128,19.765,71.99,222,134
+120min,43.49,33.601,51.61,41.817,32.518,51.22,84,134
