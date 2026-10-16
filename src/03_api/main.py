@@ -184,20 +184,16 @@ def simulate_action(patient_id: str, request: WhatIfRequest):
 
 
 # ── UI Page Routes ────────────────────────────────────────────────────────────
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
-
-STATIC_DIR = ROOT / "src" / "04_ui" / "static"
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+from fastapi.responses import RedirectResponse
 
 @app.get("/")
 @app.get("/doctor")
 def serve_doctor_dashboard():
-    return FileResponse(STATIC_DIR / "doctor.html")
+    return RedirectResponse(url="http://localhost:3000/doctor")
 
 @app.get("/patient")
 def serve_patient_dashboard():
-    return FileResponse(STATIC_DIR / "patient.html")
+    return RedirectResponse(url="http://localhost:3000/patient")
 
 
 if __name__ == "__main__":
