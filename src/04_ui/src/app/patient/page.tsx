@@ -1,15 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
 
 interface WhatIfResponse {
   patient_id: string;
   patient_name: string;
+  diabetes_type?: string;
   action_evaluated: {
     carbs_added_g: number;
     bolus_added_u: number;
     walk_duration_min: number;
+    oral_med_taken?: boolean;
   };
   horizons_min: number[];
   baseline_trajectory: number[];
@@ -19,23 +21,36 @@ interface WhatIfResponse {
   clinical_recommendation: string;
 }
 
+interface PatientSummary {
+  patient_id: string;
+  name: string;
+  diabetes_type: string;
+  clinical_risk_tier: string;
+}
+
 export default function PatientDashboard() {
-  const patientId = "T1D-IN-001"; // Aarav Sharma
+  const [patientId, setPatientId] = useState<string>("T1D-IN-001");
+  const [patientList, setPatientList] = useState<PatientSummary[]>([]);
+  const [patientEHR, setPatientEHR] = useState<any>(null);
+
   const [currentGlucose, setCurrentGlucose] = useState<number>(112);
-  const [cgmTime, setCgmTime] = useState<string>("7:45 PM");
+  const [cgmTime, setCgmTime] = useState<string>("19:45");
+  const [trend, setTrend] = useState<string>("STABLE");
   const [forecast30, setForecast30] = useState<number>(119);
   const [forecast60, setForecast60] = useState<number>(124);
+  const [forecast120, setForecast120] = useState<number>(115);
   const [sparklineData, setSparklineData] = useState<number[]>([]);
 
-  // Simulator Sliders
-  const [carbs, setCarbs] = useState<number>(60);
-  const [bolus, setBolus] = useState<number>(3.0);
-  const [walk, setWalk] = useState<number>(10);
+  // Simulation Sliders
+  const [carbs, setCarbs] = useState<number>(45);
+  const [bolus, setBolus] = useState<number>(2.5);
+  const [walk, setWalk] = useState<number>(15);
+  const [oralMedTaken, setOralMedTaken] = useState<boolean>(true);
 
-  // Simulation output
+  // Simulation Output
   const [whatIf, setWhatIf] = useState<WhatIfResponse | null>(null);
 
-  // Meal Multipliers
+  // Indian Food Macros & Multipliers
   const [multipliers, setMultipliers] = useState<Record<string, number>>({
     roti: 2.0,
     dal: 1.0,
@@ -56,279 +71,450 @@ export default function PatientDashboard() {
     poha: { carbs: 32, protein: 5, fat: 7 },
   };
 
-  // Initial load
+  // Determine Type 2 vs Type 1
+  const isT2D = useMemo(() => {
+    return patientEHR?.diabetes_type === "Type 2" || patientId.startsWith("T2D");
+  }, [patientEHR, patientId]);
+
+  // Read URL query parameter ?id= on initial mount
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const urlId = params.get("id");
+      if (urlId) {
+        setPatientId(urlId);
+      }
+    }
+  }, []);
+
+  // Fetch Cohort Patients for switcher dropdown
+  useEffect(() => {
+    async function fetchCohort() {
+      try {
+        const res = await fetch("http://127.0.0.1:8000/api/patients");
+        if (res.ok) {
+          const data = await res.json();
+          setPatientList(
+            (data.patients || []).map((p: any) => ({
+              patient_id: p.patient_id,
+              name: p.name,
+              diabetes_type: p.diabetes_type,
+              clinical_risk_tier: p.risk_tier,
+            }))
+          );
+        }
+      } catch (err) {
+        console.error("Failed to fetch patient list:", err);
+      }
+    }
+    fetchCohort();
+  }, []);
+
+  // Load Patient Detail whenever patientId changes
   useEffect(() => {
     async function loadPatient() {
       try {
-        const [streamRes, forecastRes] = await Promise.all([
-          fetch(`http://127.0.0.1:8000/api/patient/${patientId}/stream?points=24`),
+        const [ehrRes, streamRes, forecastRes] = await Promise.all([
+          fetch(`http://127.0.0.1:8000/api/patient/${patientId}/ehr`),
+          fetch(`http://127.0.0.1:8000/api/patient/${patientId}/stream?points=36`),
           fetch(`http://127.0.0.1:8000/api/patient/${patientId}/twin-forecast`),
         ]);
 
-        const stream = await streamRes.json();
-        const forecast = await forecastRes.json();
+        if (ehrRes.ok) {
+          const ehrData = await ehrRes.json();
+          setPatientEHR(ehrData);
+        }
 
-        setCurrentGlucose(Math.round(forecast.current_glucose));
-        setCgmTime(forecast.timestamp.split(" ")[1].slice(0, 5));
-        setForecast30(Math.round(forecast.forecast.t_plus_30min));
-        setForecast60(Math.round(forecast.forecast.t_plus_60min));
-        setSparklineData((stream.data || []).map((pt: any) => pt.glucose));
+        if (streamRes.ok) {
+          const streamData = await streamRes.json();
+          const pts = (streamData.data || []).map((pt: any) => pt.glucose);
+          setSparklineData(pts);
+        }
+
+        if (forecastRes.ok) {
+          const fc = await forecastRes.json();
+          setCurrentGlucose(Math.round(fc.current_glucose));
+          if (fc.timestamp && fc.timestamp.includes(" ")) {
+            setCgmTime(fc.timestamp.split(" ")[1].slice(0, 5));
+          }
+          setTrend(fc.trend || "STABLE");
+          setForecast30(Math.round(fc.forecast.t_plus_30min));
+          setForecast60(Math.round(fc.forecast.t_plus_60min));
+          setForecast120(Math.round(fc.forecast.t_plus_120min));
+        }
       } catch (err) {
-        console.error("Failed to load patient companion:", err);
+        console.error("Failed to load patient companion data:", err);
       }
     }
 
     loadPatient();
-  }, []);
+  }, [patientId]);
 
-  // Run simulation whenever sliders change
+  // Run Simulation whenever inputs change
   useEffect(() => {
     async function runSimulation() {
       try {
         const res = await fetch(`http://127.0.0.1:8000/api/patient/${patientId}/simulate-what-if`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ carbs_g: carbs, bolus_u: bolus, walk_min: walk }),
+          body: JSON.stringify({
+            carbs_g: carbs,
+            bolus_u: isT2D ? 0.0 : bolus,
+            walk_min: walk,
+            oral_med_taken: oralMedTaken,
+          }),
         });
-        const result = await res.json();
-        setWhatIf(result);
+        if (res.ok) {
+          const result = await res.json();
+          setWhatIf(result);
+        }
       } catch (err) {
-        console.error("What-if execution failed:", err);
+        console.error("What-if simulation failed:", err);
       }
     }
 
     runSimulation();
-  }, [carbs, bolus, walk]);
+  }, [patientId, carbs, bolus, walk, oralMedTaken, isT2D]);
 
-  // Compute Meal Totals
-  const mealTotals = Object.entries(multipliers).reduce(
-    (acc, [food, mult]) => {
-      if (mult > 0 && baseMacros[food]) {
-        acc.carbs += baseMacros[food].carbs * mult;
-        acc.protein += baseMacros[food].protein * mult;
-        acc.fat += baseMacros[food].fat * mult;
-      }
-      return acc;
-    },
-    { carbs: 0, protein: 0, fat: 0 }
-  );
+  // Calculate Meal Totals
+  const mealTotals = useMemo(() => {
+    return Object.entries(multipliers).reduce(
+      (acc, [food, mult]) => {
+        if (mult > 0 && baseMacros[food]) {
+          acc.carbs += baseMacros[food].carbs * mult;
+          acc.protein += baseMacros[food].protein * mult;
+          acc.fat += baseMacros[food].fat * mult;
+        }
+        return acc;
+      },
+      { carbs: 0, protein: 0, fat: 0 }
+    );
+  }, [multipliers]);
 
   const applyMeal = () => {
     setCarbs(Math.round(mealTotals.carbs));
   };
 
   const resetSliders = () => {
-    setCarbs(60);
-    setBolus(3.0);
-    setWalk(10);
+    setCarbs(45);
+    setBolus(2.5);
+    setWalk(15);
+    setOralMedTaken(true);
   };
 
-  const peakSimVal = whatIf ? Math.max(...whatIf.simulated_trajectory) : 207;
-  const isHypoDanger = whatIf?.safety_flag === "DANGER_HYPO" || (whatIf && Math.min(...whatIf.simulated_trajectory) < 70);
-  const isHyperSpike = whatIf?.safety_flag === "WARN_HYPER" || peakSimVal > 190;
+  const peakSimVal = whatIf ? Math.max(...whatIf.simulated_trajectory) : 190;
+  const minSimVal = whatIf ? Math.min(...whatIf.simulated_trajectory) : 110;
+  const isHypoDanger = whatIf?.safety_flag === "DANGER_HYPO" || minSimVal < 70;
+  const isHyperSpike = whatIf?.safety_flag === "WARN_HYPER" || peakSimVal > 220;
   const isSafe = !isHypoDanger && !isHyperSpike;
 
+  // Chart Rendering Coordinates for Middle Simulator
+  const chartW = 540;
+  const chartH = 220;
+  const pLeft = 45;
+  const pRight = 30;
+  const pTop = 25;
+  const pBottom = 35;
+  const plotW = chartW - pLeft - pRight;
+  const plotH = chartH - pTop - pBottom;
+
+  const minY = 60;
+  const maxY = 260;
+
+  const getY = (val: number) => {
+    const clamped = Math.max(minY, Math.min(maxY, val));
+    return pTop + plotH - ((clamped - minY) / (maxY - minY)) * plotH;
+  };
+
+  const baseCurve = whatIf?.baseline_trajectory || [currentGlucose, forecast30, forecast60, forecast120];
+  const simCurve = whatIf?.simulated_trajectory || [currentGlucose, forecast30 + 10, forecast60 + 20, forecast120 + 5];
+
+  const xPts = [pLeft, pLeft + plotW * 0.33, pLeft + plotW * 0.66, pLeft + plotW];
+  const baseYPts = baseCurve.map(getY);
+  const simYPts = simCurve.map(getY);
+
+  const baseD = `M ${xPts[0]} ${baseYPts[0]} C ${xPts[0] + 35} ${baseYPts[0]}, ${xPts[1] - 35} ${baseYPts[1]}, ${xPts[1]} ${baseYPts[1]} C ${xPts[1] + 35} ${baseYPts[1]}, ${xPts[2] - 35} ${baseYPts[2]}, ${xPts[2]} ${baseYPts[2]} C ${xPts[2] + 35} ${baseYPts[2]}, ${xPts[3] - 35} ${baseYPts[3]}, ${xPts[3]} ${baseYPts[3]}`;
+  const simD = `M ${xPts[0]} ${simYPts[0]} C ${xPts[0] + 35} ${simYPts[0]}, ${xPts[1] - 35} ${simYPts[1]}, ${xPts[1]} ${simYPts[1]} C ${xPts[1] + 35} ${simYPts[1]}, ${xPts[2] - 35} ${simYPts[2]}, ${xPts[2]} ${simYPts[2]} C ${xPts[2] + 35} ${simYPts[2]}, ${xPts[3] - 35} ${simYPts[3]}, ${xPts[3]} ${simYPts[3]}`;
+
   return (
-    <div className="min-h-screen bg-[#EBF3F1] p-4 md:p-6 text-slate-800">
-      {/* Top Header */}
-      <header className="flex items-center justify-between pb-6">
-        <div className="flex items-center space-x-3">
-          <div className="w-8 h-8 rounded-lg bg-teal-800 flex items-center justify-center text-white font-bold text-lg">
+    <div className="min-h-screen bg-white text-slate-900 flex flex-col font-sans antialiased">
+      {/* ── Top Header: Editorial Serif, Monospace Live Time & Patient Switcher ── */}
+      <header className="border-b border-slate-200 px-6 py-3 flex items-center justify-between select-none">
+        <div className="flex items-center gap-4">
+          <div className="w-8 h-8 bg-slate-900 text-white flex items-center justify-center font-bold text-lg font-editorial">
             ∞
           </div>
-          <span className="text-xl font-bold tracking-tight text-slate-900">Kiko</span>
+          <div>
+            <div className="flex items-baseline gap-2">
+              <span className="font-editorial text-2xl font-normal tracking-tight text-slate-900">
+                Kiko
+              </span>
+              <span className="text-[11px] font-mono-tech uppercase tracking-wider text-slate-500">
+                Patient Physiological Twin
+              </span>
+            </div>
+          </div>
         </div>
 
-        <div className="hidden sm:block text-center">
-          <h1 className="text-base font-bold text-slate-900">Good evening, Aarav</h1>
+        {/* Center: Patient Cohort Switcher */}
+        <div className="flex items-center gap-3">
+          <label className="text-xs font-mono-tech uppercase tracking-wider text-slate-500">
+            Active Patient:
+          </label>
+          <select
+            value={patientId}
+            onChange={(e) => setPatientId(e.target.value)}
+            className="text-xs font-semibold font-sans bg-slate-50 border border-slate-300 px-3 py-1.5 focus:outline-none focus:border-slate-500 cursor-pointer rounded-none"
+          >
+            {patientList.map((p) => (
+              <option key={p.patient_id} value={p.patient_id}>
+                {p.patient_id} · {p.name} ({p.diabetes_type})
+              </option>
+            ))}
+          </select>
+          <span className="text-[11px] font-mono-tech px-2 py-0.5 bg-slate-100 border border-slate-300 text-slate-800 uppercase">
+            {isT2D ? "Type 2 Mode" : "Type 1 AID Mode"}
+          </span>
         </div>
 
-        <div className="flex items-center space-x-3">
+        {/* Right: Clinician Portal Link & Status */}
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 text-xs font-mono-tech text-slate-600">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            <span>SYNCED 15s</span>
+          </div>
           <Link
             href="/doctor"
-            className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 shadow-sm"
+            className="px-3.5 py-1.5 text-xs font-sans font-medium text-slate-900 border border-slate-300 hover:bg-slate-100 transition-colors rounded-none"
           >
-            Clinician Portal
+            Clinician Portal →
           </Link>
-          <span className="text-xs font-medium bg-emerald-100 text-emerald-800 px-3 py-1 rounded-full flex items-center space-x-1.5">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span>Simulated Patient</span>
-          </span>
-          <div className="w-8 h-8 rounded-full bg-teal-100 text-teal-800 flex items-center justify-center text-xs font-bold">
-            AS
-          </div>
         </div>
       </header>
 
-      {/* Main 3-Column Grid */}
-      <main className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* LEFT COLUMN: Status + Lookahead + Meal Ideas (col-span-3) */}
-        <aside className="lg:col-span-3 space-y-5">
-          {/* Current Glucose Hero Card */}
-          <div className="clean-card p-5">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-[11px] text-slate-400 font-medium">
-                Current glucose · <span>{cgmTime}</span>
+      {/* ── Main 3-Column Edge-to-Edge Grid (Zero Gaps, Continuous 1px Borders) ── */}
+      <main className="flex-1 flex flex-col lg:flex-row w-full divide-y lg:divide-y-0 lg:divide-x divide-slate-200">
+        {/* ── Column 1: Live Status & Explainability Feed (25% width) ── */}
+        <section className="w-full lg:w-[25%] p-6 flex flex-col justify-between bg-white">
+          <div>
+            <div className="flex items-baseline justify-between">
+              <span className="text-[12px] font-mono-tech uppercase tracking-wider text-slate-500">
+                CURRENT CGM
               </span>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700">
-                ✓ In range
-              </span>
+              <span className="text-xs font-mono-tech text-slate-400">{cgmTime}</span>
             </div>
-            <div className="flex items-baseline space-x-2 my-2">
-              <span className="text-5xl font-black text-slate-900">{currentGlucose}</span>
-              <span className="text-xs font-medium text-slate-400">mg/dL</span>
-            </div>
-            <p className="text-xs font-semibold text-emerald-600 flex items-center">
-              <span className="mr-1">↗</span> Rising slowly
-            </p>
 
-            {/* Sparkline Canvas */}
-            <div className="h-16 w-full mt-4">
-              <svg className="w-full h-full" viewBox="0 0 200 60" preserveAspectRatio="none">
-                <polyline
-                  fill="none"
-                  stroke="#2563EB"
-                  strokeWidth="2.5"
-                  points={sparklineData
-                    .map((val, i) => `${(i / (sparklineData.length - 1 || 1)) * 200},${60 - ((val - 60) / 180) * 55}`)
-                    .join(" ")}
-                />
-              </svg>
+            {/* Glucose Hero Value */}
+            <div className="mt-2 flex items-baseline gap-2">
+              <span className="text-[52px] font-semibold text-slate-900 leading-none tracking-tight font-sans">
+                {currentGlucose}
+              </span>
+              <span className="text-base font-semibold text-slate-900 font-sans">
+                mg/dL
+              </span>
+              <span className="ml-auto text-xs font-mono-tech px-2 py-0.5 border border-slate-300 text-slate-800 bg-slate-50">
+                {trend.replace("_", " ")}
+              </span>
             </div>
-            <p className="text-[10px] text-slate-400 mt-2 text-center">Last 3 hours · target 70–180</p>
+
+            {/* 3-Hour Sparkline Box */}
+            <div className="mt-4 border border-slate-200 p-3 bg-slate-50/50">
+              <div className="flex items-center justify-between text-[11px] font-mono-tech text-slate-500 mb-2">
+                <span>Recent 3-Hour Trajectory</span>
+                <span>Target: 70–140</span>
+              </div>
+              <div className="h-14 flex items-end gap-1">
+                {sparklineData.slice(-24).map((val, idx) => {
+                  const h = Math.max(10, Math.min(52, ((val - 60) / 180) * 52));
+                  const isHigh = val > 180;
+                  const isLow = val < 70;
+                  return (
+                    <div
+                      key={idx}
+                      className={`flex-1 transition-all ${
+                        isLow
+                          ? "bg-rose-500"
+                          : isHigh
+                          ? "bg-amber-500"
+                          : "bg-blue-600"
+                      }`}
+                      style={{ height: `${h}px` }}
+                      title={`${val} mg/dL`}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Predictive Horizons Grid */}
+            <div className="mt-4 grid grid-cols-2 gap-0 border border-slate-200 divide-x divide-slate-200">
+              <div className="p-3 text-center">
+                <span className="text-[11px] font-mono-tech text-slate-500 block uppercase">
+                  In +30 min
+                </span>
+                <span className="text-xl font-semibold font-mono-tech text-slate-900 mt-1 block">
+                  {forecast30} <span className="text-xs font-normal">mg/dL</span>
+                </span>
+                <span className="text-[10px] font-sans text-slate-500">
+                  {forecast30 >= 70 && forecast30 <= 140 ? "Safe Target" : "Excursion Risk"}
+                </span>
+              </div>
+              <div className="p-3 text-center">
+                <span className="text-[11px] font-mono-tech text-slate-500 block uppercase">
+                  In +60 min
+                </span>
+                <span className="text-xl font-semibold font-mono-tech text-slate-900 mt-1 block">
+                  {forecast60} <span className="text-xs font-normal">mg/dL</span>
+                </span>
+                <span className="text-[10px] font-sans text-slate-500">
+                  {forecast60 >= 70 && forecast60 <= 140 ? "Safe Target" : "Excursion Risk"}
+                </span>
+              </div>
+            </div>
+
+            {/* Twin Insights Explainability Feed */}
+            <div className="mt-6 border-t border-slate-200 pt-4">
+              <h3 className="font-editorial text-lg font-normal text-slate-900 tracking-tight">
+                Twin Physiological Insights
+              </h3>
+              <div className="mt-3 space-y-2 text-xs text-slate-700">
+                {isT2D ? (
+                  <>
+                    <div className="p-2.5 border border-slate-200 bg-slate-50">
+                      <span className="font-semibold block text-slate-900">
+                        Insulin Resistance Clearance
+                      </span>
+                      HOMA-IR index ({patientEHR?.homa_ir || 3.8}) slows postprandial glucose uptake. Post-meal walking directly triggers GLUT-4 translocation in muscle.
+                    </div>
+                    <div className="p-2.5 border border-slate-200 bg-slate-50">
+                      <span className="font-semibold block text-slate-900">
+                        Oral Therapy Regimen
+                      </span>
+                      Covered by {patientEHR?.oral_medications || "Metformin + SGLT2i"}. Ensures steady hepatic gluconeogenesis suppression.
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="p-2.5 border border-slate-200 bg-slate-50">
+                      <span className="font-semibold block text-slate-900">
+                        Insulin Sensitivity Factor (ISF)
+                      </span>
+                      Current sensitivity: 1U lowers glucose by {patientEHR?.isf_mg_dl_per_unit || 45} mg/dL. Basal infusion nominal.
+                    </div>
+                    <div className="p-2.5 border border-slate-200 bg-slate-50">
+                      <span className="font-semibold block text-slate-900">
+                        Insulin-to-Carb Ratio (ICR)
+                      </span>
+                      Dosing at 1:{patientEHR?.icr_grams_per_unit || 10}g. Pre-bolusing 15 min prior to meals avoids postprandial spikes.
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
           </div>
 
-          {/* Forecast Badges */}
-          <div className="grid grid-cols-2 gap-3">
-            <div className="clean-card p-3.5">
-              <span className="text-[10px] text-slate-400 block font-medium">In 30 min</span>
-              <div className="flex items-baseline space-x-1 my-1">
-                <span className="text-xl font-extrabold text-slate-800">{forecast30}</span>
-                <span className="text-[10px] text-slate-400">mg/dL</span>
-              </div>
-              <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded block text-center">
-                Stays in range
-              </span>
-            </div>
-            <div className="clean-card p-3.5">
-              <span className="text-[10px] text-slate-400 block font-medium">In 1 hour</span>
-              <div className="flex items-baseline space-x-1 my-1">
-                <span className="text-xl font-extrabold text-slate-800">{forecast60}</span>
-                <span className="text-[10px] text-slate-400">mg/dL</span>
-              </div>
-              <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded block text-center">
-                Stays in range
-              </span>
-            </div>
+          {/* Lower Card: Clinical Risk Profile */}
+          <div className="mt-6 pt-4 border-t border-slate-100 text-[11px] font-mono-tech text-slate-500">
+            <span>Clinical Tier: {patientEHR?.clinical_risk_tier || "Moderate"}</span>
+            <span className="block mt-1 truncate">
+              Condition: {patientEHR?.risk_rationale || "Stable ambulatory cohort."}
+            </span>
           </div>
-          <p className="text-[10px] text-slate-400 text-center -mt-2">Forecast if you do nothing new</p>
+        </section>
 
-          {/* Next Meal Ideas */}
-          <div className="clean-card p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-xs font-bold text-slate-900">Next meal ideas</h3>
-              <span className="text-[9px] font-bold bg-teal-50 text-teal-700 px-2 py-0.5 rounded">Matched to trend</span>
-            </div>
-            <p className="text-[10px] text-slate-400">Lower-carb picks to keep you steady</p>
-
-            <div className="space-y-2">
-              <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100 flex items-center space-x-2.5">
-                <span className="w-6 h-6 rounded-lg bg-emerald-100 text-emerald-800 flex items-center justify-center text-xs">
-                  🌱
-                </span>
-                <div>
-                  <p className="text-xs font-bold text-slate-800">Moong chilla with mint chutney</p>
-                  <p className="text-[10px] text-slate-500">12 g carbs · 14 g protein</p>
-                </div>
+        {/* ── Column 2: Counterfactual What-If Simulator (48% width) ── */}
+        <section className="w-full lg:w-[48%] p-6 flex flex-col justify-between bg-white">
+          <div>
+            <div className="flex items-baseline justify-between border-b border-slate-200 pb-3">
+              <div>
+                <h2 className="font-editorial text-2xl font-normal text-slate-900 tracking-tight">
+                  Counterfactual "What-If" Simulation
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Simulate dynamic interventions and project next 2-hour physiological response.
+                </p>
               </div>
-              <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100 flex items-center space-x-2.5">
-                <span className="w-6 h-6 rounded-lg bg-emerald-100 text-emerald-800 flex items-center justify-center text-xs">
-                  🌾
-                </span>
-                <div>
-                  <p className="text-xs font-bold text-slate-800">Roasted chana with buttermilk</p>
-                  <p className="text-[10px] text-slate-500">14 g carbs · 9 g protein</p>
-                </div>
-              </div>
-              <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100 flex items-center space-x-2.5">
-                <span className="w-6 h-6 rounded-lg bg-emerald-100 text-emerald-800 flex items-center justify-center text-xs">
-                  🥒
-                </span>
-                <div>
-                  <p className="text-xs font-bold text-slate-800">Cucumber and paneer salad</p>
-                  <p className="text-[10px] text-slate-500">5 g carbs · 11 g protein</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="pt-2 border-t border-slate-100 flex items-start space-x-2 text-[10px] text-slate-500">
-              <span>🌙</span>
-              <p>If you are dropping at bedtime, we suggest a small glass of milk to steady the night.</p>
-            </div>
-          </div>
-        </aside>
-
-        {/* CENTER COLUMN: Simulator & Safety Check (col-span-6) */}
-        <section className="lg:col-span-6 space-y-5">
-          <div className="clean-card p-5">
-            <div className="flex items-center justify-between mb-1">
-              <h2 className="text-sm font-bold text-slate-900">What if I eat this?</h2>
               <button
                 onClick={resetSliders}
-                className="text-xs font-semibold px-2.5 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700"
+                className="text-xs font-mono-tech text-slate-600 hover:text-slate-900 px-2.5 py-1 border border-slate-200 hover:bg-slate-100 transition-colors rounded-none"
               >
                 Reset
               </button>
             </div>
-            <p className="text-xs text-slate-400 mb-4">
-              Move the sliders to see how your glucose could respond over the next 2 hours
-            </p>
 
-            {/* Sliders */}
-            <div className="grid grid-cols-3 gap-3 mb-5">
-              <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl">
-                <div className="flex items-center justify-between text-xs mb-2">
-                  <span className="font-bold text-slate-700">🍴 Food carbs</span>
-                  <span className="font-extrabold text-blue-700">{carbs} g</span>
+            {/* Interactive Sliders Deck */}
+            <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+              {/* Slider 1: Food Carbs */}
+              <div className="p-3 border border-slate-200 bg-white">
+                <div className="flex justify-between text-xs font-medium text-slate-800">
+                  <span>Food Carbs</span>
+                  <span className="font-mono-tech font-bold text-blue-700">{carbs} g</span>
                 </div>
                 <input
                   type="range"
                   min="0"
-                  max="100"
+                  max="120"
+                  step="5"
                   value={carbs}
-                  onChange={(e) => setCarbs(parseFloat(e.target.value))}
-                  className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                  onChange={(e) => setCarbs(Number(e.target.value))}
+                  className="w-full mt-2 accent-blue-600 cursor-pointer"
                 />
-                <div className="flex justify-between text-[9px] text-slate-400 mt-1">
-                  <span>0</span>
-                  <span>100 g</span>
+                <div className="flex justify-between text-[10px] font-mono-tech text-slate-400 mt-1">
+                  <span>0g</span>
+                  <span>120g</span>
                 </div>
               </div>
 
-              <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl">
-                <div className="flex items-center justify-between text-xs mb-2">
-                  <span className="font-bold text-slate-700">💉 Insulin bolus</span>
-                  <span className="font-extrabold text-teal-700">{bolus} U</span>
+              {/* Slider 2: If T1D Bolus / If T2D Oral Med */}
+              {isT2D ? (
+                <div className="p-3 border border-slate-200 bg-white flex flex-col justify-between">
+                  <div className="flex justify-between text-xs font-medium text-slate-800">
+                    <span>Oral Meds</span>
+                    <span className="font-mono-tech font-bold text-emerald-700">
+                      {oralMedTaken ? "Taken" : "Missed"}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => setOralMedTaken((prev) => !prev)}
+                    className={`mt-2 py-1 text-xs font-mono-tech uppercase tracking-wider border transition-colors ${
+                      oralMedTaken
+                        ? "bg-emerald-50 border-emerald-300 text-emerald-900 font-semibold"
+                        : "bg-rose-50 border-rose-300 text-rose-900"
+                    }`}
+                  >
+                    {oralMedTaken ? "✓ Dose Taken" : "✗ Dose Missed"}
+                  </button>
+                  <span className="text-[10px] text-slate-400 font-mono-tech mt-1">
+                    Suppresses hepatic output
+                  </span>
                 </div>
-                <input
-                  type="range"
-                  min="0"
-                  max="10"
-                  step="0.5"
-                  value={bolus}
-                  onChange={(e) => setBolus(parseFloat(e.target.value))}
-                  className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-teal-600"
-                />
-                <div className="flex justify-between text-[9px] text-slate-400 mt-1">
-                  <span>0</span>
-                  <span>10 U</span>
+              ) : (
+                <div className="p-3 border border-slate-200 bg-white">
+                  <div className="flex justify-between text-xs font-medium text-slate-800">
+                    <span>Insulin Bolus</span>
+                    <span className="font-mono-tech font-bold text-blue-700">{bolus.toFixed(1)} U</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="10"
+                    step="0.5"
+                    value={bolus}
+                    onChange={(e) => setBolus(Number(e.target.value))}
+                    className="w-full mt-2 accent-blue-600 cursor-pointer"
+                  />
+                  <div className="flex justify-between text-[10px] font-mono-tech text-slate-400 mt-1">
+                    <span>0 U</span>
+                    <span>10 U</span>
+                  </div>
                 </div>
-              </div>
+              )}
 
-              <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl">
-                <div className="flex items-center justify-between text-xs mb-2">
-                  <span className="font-bold text-slate-700">🚶 Walking</span>
-                  <span className="font-extrabold text-emerald-700">{walk} min</span>
+              {/* Slider 3: Walking / Activity */}
+              <div className="p-3 border border-slate-200 bg-white">
+                <div className="flex justify-between text-xs font-medium text-slate-800">
+                  <span>Post-Meal Walk</span>
+                  <span className="font-mono-tech font-bold text-emerald-700">{walk} min</span>
                 </div>
                 <input
                   type="range"
@@ -336,213 +522,173 @@ export default function PatientDashboard() {
                   max="60"
                   step="5"
                   value={walk}
-                  onChange={(e) => setWalk(parseFloat(e.target.value))}
-                  className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-emerald-600"
+                  onChange={(e) => setWalk(Number(e.target.value))}
+                  className="w-full mt-2 accent-emerald-600 cursor-pointer"
                 />
-                <div className="flex justify-between text-[9px] text-slate-400 mt-1">
-                  <span>0</span>
-                  <span>60 min</span>
+                <div className="flex justify-between text-[10px] font-mono-tech text-slate-400 mt-1">
+                  <span>0m</span>
+                  <span>60m (GLUT-4)</span>
                 </div>
               </div>
             </div>
 
-            {/* Trajectory Header */}
-            <div className="flex items-center justify-between text-xs mb-2">
-              <span className="font-bold text-slate-800">Two possible next 2 hours</span>
-              <div className="flex items-center space-x-3 text-[11px]">
-                <span className="text-slate-400 font-medium">-- Do nothing</span>
-                <span className="text-blue-700 font-bold">— With your inputs</span>
+            {/* Dual-Curve Trajectory Simulation Canvas */}
+            <div className="mt-4 border border-slate-200 p-3 bg-white">
+              <div className="flex items-center justify-between text-xs mb-2">
+                <span className="font-medium text-slate-900">
+                  Dual-Trajectory 2-Hour Physiological Projection
+                </span>
+                <div className="flex items-center gap-3 text-[11px] font-mono-tech">
+                  <span className="flex items-center gap-1.5 text-slate-500">
+                    <span className="w-3 h-0.5 bg-slate-400 inline-block stroke-dasharray" />
+                    Baseline (Do Nothing)
+                  </span>
+                  <span className="flex items-center gap-1.5 text-blue-700 font-semibold">
+                    <span className="w-3 h-0.5 bg-blue-600 inline-block" />
+                    Simulated Intervention
+                  </span>
+                </div>
               </div>
-            </div>
 
-            {/* Custom SVG Trajectory Chart */}
-            <div className="h-64 w-full relative pt-2">
-              <svg className="w-full h-full" viewBox="0 0 450 220" preserveAspectRatio="none">
-                {/* Target Band (70-180 mg/dL) */}
-                <rect x="0" y="65" width="450" height="95" fill="#F0FDF4" />
-                <line x1="0" y1="65" x2="450" y2="65" stroke="#BBF7D0" strokeDasharray="3 3" />
-                <line x1="0" y1="160" x2="450" y2="160" stroke="#BBF7D0" strokeDasharray="3 3" />
+              <svg className="w-full h-auto overflow-visible" viewBox={`0 0 ${chartW} ${chartH}`}>
+                {/* Green Safe Target Zone Band (70 - 140 mg/dL) */}
+                <rect
+                  x={pLeft}
+                  y={getY(140)}
+                  width={plotW}
+                  height={Math.max(0, getY(70) - getY(140))}
+                  fill="#10B981"
+                  fillOpacity="0.08"
+                />
 
-                {/* Vertical 'Now' Line */}
-                <line x1="90" y1="10" x2="90" y2="210" stroke="#CBD5E1" strokeWidth="1.5" />
-                <text x="95" y="25" fontSize="10" fill="#64748B" fontWeight="bold">
-                  Now
+                {/* Y Axis Guide Lines */}
+                {[240, 180, 140, 100, 70].map((val) => {
+                  const y = getY(val);
+                  return (
+                    <g key={val}>
+                      <line x1={pLeft} y1={y} x2={pLeft + plotW} y2={y} stroke="#F1F5F9" strokeWidth="1" />
+                      <text x={pLeft - 8} y={y + 3.5} textAnchor="end" className="text-[10px] font-mono-tech fill-slate-400">
+                        {val}
+                      </text>
+                    </g>
+                  );
+                })}
+
+                {/* Baseline Trajectory (Dashed Gray) */}
+                <path d={baseD} fill="none" stroke="#94A3B8" strokeWidth="2" strokeDasharray="4 3" />
+
+                {/* Simulated Trajectory (Solid Blue) */}
+                <path d={simD} fill="none" stroke="#2563EB" strokeWidth="2.6" />
+
+                {/* Horizon Nodes */}
+                {xPts.map((x, i) => (
+                  <g key={i}>
+                    {/* Simulated Dot */}
+                    <circle cx={x} cy={simYPts[i]} r="4.5" fill="#2563EB" stroke="#FFFFFF" strokeWidth="1.5" />
+                    <text x={x} y={simYPts[i] - 8} textAnchor="middle" className="text-[11px] font-mono-tech font-bold fill-blue-700">
+                      {Math.round(simCurve[i])}
+                    </text>
+
+                    {/* Baseline Dot */}
+                    <circle cx={x} cy={baseYPts[i]} r="3" fill="#94A3B8" />
+                  </g>
+                ))}
+
+                {/* Peak Marker Annotation */}
+                <text
+                  x={xPts[2]}
+                  y={simYPts[2] - 22}
+                  textAnchor="middle"
+                  className="text-[10px] font-mono-tech font-bold fill-amber-700 bg-white"
+                >
+                  Peak {Math.round(peakSimVal)} mg/dL @ +60m
                 </text>
 
-                {/* Baseline Line (Do nothing) */}
-                {whatIf && (
-                  <polyline
-                    fill="none"
-                    stroke="#94A3B8"
-                    strokeWidth="2"
-                    strokeDasharray="4 4"
-                    points={`
-                      90,${210 - ((whatIf.baseline_trajectory[0] - 40) / 280) * 190}
-                      180,${210 - ((whatIf.baseline_trajectory[1] - 40) / 280) * 190}
-                      280,${210 - ((whatIf.baseline_trajectory[2] - 40) / 280) * 190}
-                      410,${210 - ((whatIf.baseline_trajectory[3] - 40) / 280) * 190}
-                    `}
-                  />
-                )}
-
-                {/* Simulated Curve (With your inputs) */}
-                {whatIf && (
-                  <polyline
-                    fill="none"
-                    stroke="#2563EB"
-                    strokeWidth="3"
-                    points={`
-                      90,${210 - ((whatIf.simulated_trajectory[0] - 40) / 280) * 190}
-                      180,${210 - ((whatIf.simulated_trajectory[1] - 40) / 280) * 190}
-                      280,${210 - ((whatIf.simulated_trajectory[2] - 40) / 280) * 190}
-                      410,${210 - ((whatIf.simulated_trajectory[3] - 40) / 280) * 190}
-                    `}
-                  />
-                )}
-
-                {/* Peak Dot & Callout */}
-                {whatIf && (
-                  <>
-                    <circle
-                      cx="280"
-                      cy={210 - ((whatIf.simulated_trajectory[2] - 40) / 280) * 190}
-                      r="4"
-                      fill="#EA580C"
-                      stroke="#FFFFFF"
-                      strokeWidth="2"
-                    />
-                    <text
-                      x="240"
-                      y={Math.max(25, 210 - ((whatIf.simulated_trajectory[2] - 40) / 280) * 190 - 10)}
-                      fontSize="10"
-                      fill="#EA580C"
-                      fontWeight="bold"
-                    >
-                      Peak {Math.round(peakSimVal)} at +75 min
-                    </text>
-                  </>
-                )}
+                {/* X Axis Labels */}
+                <g transform={`translate(0, ${pTop + plotH + 18})`}>
+                  <text x={xPts[0]} textAnchor="middle" className="text-[11px] font-sans font-medium fill-slate-800">Now</text>
+                  <text x={xPts[1]} textAnchor="middle" className="text-[11px] font-sans fill-slate-500">+30 min</text>
+                  <text x={xPts[2]} textAnchor="middle" className="text-[11px] font-sans fill-slate-500">+60 min</text>
+                  <text x={xPts[3]} textAnchor="end" className="text-[11px] font-sans fill-slate-500">+120 min</text>
+                </g>
               </svg>
             </div>
 
-            <div className="flex justify-between text-[10px] text-slate-400 mt-2">
-              <span>Now</span>
-              <span>+30 min</span>
-              <span>+1 hour</span>
-              <span>+2 hours</span>
+            {/* Safety Check & Clinical Guidance Panel */}
+            <div className="mt-4 border border-slate-200 p-3.5 bg-slate-50/60">
+              <div className="flex items-center gap-2 mb-2">
+                <span
+                  className={`text-[11px] font-mono-tech uppercase font-bold px-2 py-0.5 border ${
+                    isSafe
+                      ? "bg-emerald-100 text-emerald-900 border-emerald-300"
+                      : isHypoDanger
+                      ? "bg-rose-100 text-[#8F1D21] border-rose-300"
+                      : "bg-amber-100 text-amber-900 border-amber-300"
+                  }`}
+                >
+                  {isSafe ? "✓ Safe Target" : isHypoDanger ? "⚠ Hypo Danger (<70)" : "⚡ Hyper Spike (>220)"}
+                </span>
+                <span className="text-xs font-semibold text-slate-900">
+                  Simulation Outcome Analysis
+                </span>
+              </div>
+              <p className="text-xs text-slate-800 leading-relaxed font-normal">
+                {whatIf?.clinical_recommendation ||
+                  "Adjust sliders to project glycemic response."}
+              </p>
             </div>
           </div>
 
-          {/* Safety Check for this Scenario */}
-          <div className="clean-card p-5">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-xs font-bold text-slate-900">Safety check for this scenario</h3>
-              <span className="text-[10px] text-slate-400">Updates as you move the sliders</span>
-            </div>
-
-            <div className="grid grid-cols-3 gap-1.5 p-1 bg-slate-100 rounded-xl text-center text-xs font-bold mb-3">
-              <div className={`py-1.5 rounded-lg ${isSafe ? "bg-emerald-100 text-emerald-800 shadow-sm" : "text-slate-400"}`}>
-                Safe
-              </div>
-              <div
-                className={`py-1.5 rounded-lg ${
-                  isHypoDanger ? "bg-rose-100 text-rose-800 shadow-sm" : "text-slate-400"
-                }`}
-              >
-                Hypo danger
-              </div>
-              <div
-                className={`py-1.5 rounded-lg ${
-                  isHyperSpike ? "bg-amber-100 text-amber-800 shadow-sm" : "text-slate-400"
-                }`}
-              >
-                Hyper spike
-              </div>
-            </div>
-
-            <div
-              className={`p-3.5 border rounded-xl flex items-start space-x-3 ${
-                isHypoDanger
-                  ? "bg-rose-50/70 border-rose-200 text-rose-900"
-                  : isHyperSpike
-                  ? "bg-amber-50/70 border-amber-200 text-amber-900"
-                  : "bg-emerald-50/70 border-emerald-200 text-emerald-900"
-              }`}
-            >
-              <span className="text-base">{isHypoDanger ? "🛑" : isHyperSpike ? "⚠️" : "✅"}</span>
-              <div>
-                <p className="text-xs font-bold">
-                  {isHypoDanger
-                    ? "Hypoglycemia Danger! Predicted crash below 70 mg/dL."
-                    : isHyperSpike
-                    ? `Your glucose is likely to peak near ${Math.round(peakSimVal)} mg/dL after eating.`
-                    : "Safe to proceed! Glucose stays balanced within your target range."}
-                </p>
-                <p className="text-[11px] mt-0.5 opacity-90">
-                  {whatIf?.clinical_recommendation ||
-                    "Try a 20-minute walk after the meal, or adjust bolus slightly."}
-                </p>
-              </div>
-            </div>
-            <p className="text-[9px] text-slate-400 text-center mt-3">
-              Guidance from a simulated twin. It is not medical advice.
-            </p>
+          <div className="pt-3 border-t border-slate-100 text-[11px] font-mono-tech text-slate-500 flex justify-between">
+            <span>ISF/ICR Fitted Kinetics</span>
+            <span>Net Delta: {whatIf ? (whatIf.simulated_trajectory[2] - whatIf.baseline_trajectory[2]).toFixed(1) : "0"} mg/dL</span>
           </div>
         </section>
 
-        {/* RIGHT COLUMN: Food Logger & Macros (col-span-3) */}
-        <aside className="lg:col-span-3 clean-card p-5 flex flex-col justify-between">
+        {/* ── Column 3: Indian Nutrition & Meal Calculator (27% width) ── */}
+        <section className="w-full lg:w-[27%] p-6 flex flex-col justify-between bg-white">
           <div>
-            <h2 className="text-sm font-bold text-slate-900 mb-0.5">Today's meal</h2>
-            <p className="text-[10px] text-slate-400 mb-3">Tap to add common Indian foods</p>
-
-            {/* Food Chips */}
-            <div className="flex flex-wrap gap-1.5 mb-4 text-xs font-medium">
-              {["roti", "rice", "dal", "paneer", "dosa", "idli", "poha"].map((food) => {
-                const isActive = (multipliers[food] || 0) > 0;
-                return (
-                  <button
-                    key={food}
-                    onClick={() =>
-                      setMultipliers((prev) => ({
-                        ...prev,
-                        [food]: prev[food] > 0 ? 0 : 1.0,
-                      }))
-                    }
-                    className={`px-2.5 py-1 rounded-full text-xs font-bold transition-all ${
-                      isActive
-                        ? "bg-slate-900 text-white"
-                        : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                    }`}
-                  >
-                    {isActive ? "✓" : "+"} {food.charAt(0).toUpperCase() + food.slice(1)}
-                  </button>
-                );
-              })}
+            <div className="border-b border-slate-200 pb-3">
+              <h2 className="font-editorial text-xl font-normal text-slate-900 tracking-tight">
+                Today's Meal Calculator
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Calculate carbohydrate impact of common Indian dietary staples.
+              </p>
             </div>
 
-            {/* Selected Items */}
-            <div className="space-y-3 mb-5">
-              {Object.entries(multipliers).map(([food, mult]) => {
-                if (mult <= 0) return null;
-                const c = Math.round(baseMacros[food].carbs * mult);
-
+            {/* Food Items Multiplier List */}
+            <div className="mt-4 space-y-2.5">
+              {Object.entries(baseMacros).map(([food, macro]) => {
+                const currentMult = multipliers[food] || 0;
+                const capitalized = food.charAt(0).toUpperCase() + food.slice(1);
                 return (
-                  <div key={food} className="p-2.5 bg-slate-50 border border-slate-100 rounded-xl">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="font-bold text-slate-800 capitalize">{food}</span>
-                      <span className="font-extrabold text-slate-900">{c} g carbs</span>
+                  <div
+                    key={food}
+                    className="p-2.5 border border-slate-200 flex items-center justify-between bg-white hover:bg-slate-50 transition-colors"
+                  >
+                    <div>
+                      <span className="text-xs font-semibold text-slate-900 block">
+                        {capitalized}
+                      </span>
+                      <span className="text-[10px] font-mono-tech text-slate-500">
+                        {macro.carbs}g C · {macro.protein}g P · {macro.fat}g F
+                      </span>
                     </div>
-                    <div className="flex space-x-1 text-[10px] font-semibold mt-2">
-                      {[0.5, 1.0, 1.5, 2.0].map((m) => (
+
+                    {/* Step Multipliers */}
+                    <div className="flex items-center gap-1 font-mono-tech text-xs">
+                      {[0, 0.5, 1, 1.5, 2].map((m) => (
                         <button
                           key={m}
                           onClick={() => setMultipliers((prev) => ({ ...prev, [food]: m }))}
-                          className={`px-2 py-0.5 rounded transition-all ${
-                            mult === m ? "bg-slate-900 text-white font-bold" : "bg-white border border-slate-200"
+                          className={`px-1.5 py-0.5 border text-[10px] ${
+                            currentMult === m
+                              ? "bg-slate-900 text-white border-slate-900 font-bold"
+                              : "bg-white text-slate-600 border-slate-200 hover:bg-slate-100"
                           }`}
                         >
-                          x{m === 0.5 ? "½" : m}
+                          {m === 0 ? "0" : m === 0.5 ? "½" : `${m}x`}
                         </button>
                       ))}
                     </div>
@@ -551,60 +697,40 @@ export default function PatientDashboard() {
               })}
             </div>
 
-            {/* Totals */}
-            <div className="space-y-2.5 pt-3 border-t border-slate-100 text-xs">
-              <span className="font-bold text-slate-900 block mb-1">Meal total</span>
-              <div>
-                <div className="flex justify-between font-semibold mb-0.5">
-                  <span className="text-slate-600">Carbs</span>
-                  <span className="text-blue-700 font-extrabold">{Math.round(mealTotals.carbs)} g</span>
+            {/* Macro Summary Strip */}
+            <div className="mt-5 border border-slate-200 p-3 bg-slate-50">
+              <span className="text-xs font-semibold text-slate-900 block mb-2">
+                Cumulative Meal Macros
+              </span>
+              <div className="grid grid-cols-3 gap-2 text-center font-mono-tech">
+                <div className="p-1.5 bg-white border border-slate-200">
+                  <span className="text-[10px] text-slate-500 uppercase block">Carbs</span>
+                  <span className="text-base font-bold text-blue-700">{Math.round(mealTotals.carbs)}g</span>
                 </div>
-                <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-blue-600 rounded-full"
-                    style={{ width: `${Math.min(100, (mealTotals.carbs / 100) * 100)}%` }}
-                  ></div>
+                <div className="p-1.5 bg-white border border-slate-200">
+                  <span className="text-[10px] text-slate-500 uppercase block">Protein</span>
+                  <span className="text-base font-bold text-emerald-700">{Math.round(mealTotals.protein)}g</span>
                 </div>
-              </div>
-              <div>
-                <div className="flex justify-between font-semibold mb-0.5">
-                  <span className="text-slate-600">Protein</span>
-                  <span className="text-emerald-700 font-extrabold">{Math.round(mealTotals.protein)} g</span>
-                </div>
-                <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-emerald-600 rounded-full"
-                    style={{ width: `${Math.min(100, (mealTotals.protein / 50) * 100)}%` }}
-                  ></div>
-                </div>
-              </div>
-              <div>
-                <div className="flex justify-between font-semibold mb-0.5">
-                  <span className="text-slate-600">Fat</span>
-                  <span className="text-amber-700 font-extrabold">{Math.round(mealTotals.fat)} g</span>
-                </div>
-                <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-amber-500 rounded-full"
-                    style={{ width: `${Math.min(100, (mealTotals.fat / 50) * 100)}%` }}
-                  ></div>
+                <div className="p-1.5 bg-white border border-slate-200">
+                  <span className="text-[10px] text-slate-500 uppercase block">Fat</span>
+                  <span className="text-base font-bold text-amber-700">{Math.round(mealTotals.fat)}g</span>
                 </div>
               </div>
             </div>
-          </div>
 
-          <div className="mt-6">
+            {/* Apply Button */}
             <button
               onClick={applyMeal}
-              className="w-full py-3 rounded-xl bg-slate-900 text-white font-bold text-xs hover:bg-slate-800 transition-all shadow-sm"
+              className="w-full mt-3 py-2 text-xs font-mono-tech font-bold uppercase tracking-wider bg-slate-900 text-white hover:bg-slate-800 transition-colors border border-slate-900 rounded-none cursor-pointer"
             >
-              Simulate this meal
+              Apply {Math.round(mealTotals.carbs)}g Carbs to Simulator →
             </button>
-            <p className="text-[10px] text-slate-400 text-center mt-1.5">
-              Sends {Math.round(mealTotals.carbs)} g carbs to the simulator
-            </p>
           </div>
-        </aside>
+
+          <div className="pt-3 border-t border-slate-100 text-[11px] font-mono-tech text-slate-400">
+            Nutrition Database: ICMR-NIN Food Composition Tables
+          </div>
+        </section>
       </main>
     </div>
   );

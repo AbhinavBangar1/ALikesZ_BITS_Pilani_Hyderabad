@@ -21,6 +21,8 @@ from typing import Dict, Any, List
 import numpy as np
 import pandas as pd
 
+from cdss_engine import CDSSEngine
+
 ROOT = Path(__file__).resolve().parents[2]
 MODELS_DIR = ROOT / "models"
 COHORT_DIR = ROOT / "data" / "synthetic_cohort"
@@ -28,6 +30,9 @@ COHORT_DIR = ROOT / "data" / "synthetic_cohort"
 
 class DigitalTwinEngine:
     def __init__(self):
+        # 0. Initialize Clinical Decision Support System (CDSS)
+        self.cdss = CDSSEngine()
+
         # 1. Load patient metadata
         metadata_file = COHORT_DIR / "patients_metadata.json"
         with open(metadata_file, "r", encoding="utf-8") as f:
@@ -129,13 +134,121 @@ class DigitalTwinEngine:
         }
         return pd.DataFrame([features])
 
+    def _predict_state_t2d(self, patient_id: str, window_df: pd.DataFrame, profile: dict) -> Dict[str, Any]:
+        """
+        Dedicated Type 2 Diabetes Multi-Horizon Forecaster:
+        Models glucose trajectory without pump bolus features.
+        Fuses HOMA-IR, residual beta-cell secretion (HOMA-B), oral medication timing,
+        circadian hepatic gluconeogenesis, and muscle GLUT-4 clearance from activity.
+        """
+        curr_glucose = float(window_df.iloc[-1]["glucose"])
+        curr_time = str(window_df.iloc[-1]["timestamp"])
+        g = window_df["glucose"].values.astype(float)
+        hr = window_df["heart_rate"].values.astype(float) if "heart_rate" in window_df.columns else np.array([72.0])
+        steps = window_df["steps"].values.astype(float) if "steps" in window_df.columns else np.array([0.0])
+
+        homa_ir = float(profile.get("homa_ir", 3.8))
+        homa_beta = float(profile.get("homa_beta", 45.0))
+        hba1c = float(profile.get("hba1c_pct", 7.8))
+        eag = 28.7 * hba1c - 46.7
+
+        # Autoregressive momentum & velocity
+        roc_15m = (g[-1] - g[-4]) if len(g) >= 4 else 0.0
+        roc_30m = (g[-1] - g[-7]) if len(g) >= 7 else (roc_15m * 2)
+
+        # Activity factor over last 30 minutes
+        recent_steps = float(steps[-6:].sum()) if len(steps) >= 6 else 0.0
+        glut4_exercise_suppression = min(35.0, (recent_steps / 250.0) * 8.5)
+
+        # Insulin resistance clearance lag factor (higher HOMA-IR = slower clearance back to eAG)
+        clearance_rate = (homa_beta / 50.0) / (homa_ir / 2.2)
+
+        # 30-min horizon: dominated by velocity momentum and active meal elevation
+        delta_30 = (roc_30m * 0.55) - ((curr_glucose - eag) * 0.08 * clearance_rate) - (glut4_exercise_suppression * 0.4)
+        pred_30 = float(np.clip(curr_glucose + delta_30, 50.0, 380.0))
+
+        # 60-min horizon: postprandial peak or slow regression towards baseline
+        delta_60 = (roc_30m * 0.75) - ((curr_glucose - eag) * 0.22 * clearance_rate) - (glut4_exercise_suppression * 0.75)
+        pred_60 = float(np.clip(curr_glucose + delta_60, 50.0, 380.0))
+
+        # 120-min horizon: regression to equilibrium, buffered by HOMA-IR
+        pred_120 = float(np.clip(0.35 * curr_glucose + 0.65 * eag - (glut4_exercise_suppression * 0.9), 55.0, 380.0))
+
+        # Adverse Event Classifier (Model 2) operates on rolling window metrics
+        feat_m2 = self._extract_model2_features(window_df)
+        adverse_prob = float(self.model_m2.predict_proba(feat_m2[self.feature_cols_m2])[0][1])
+
+        # Evaluate clinical alerts
+        min_forecast = min(curr_glucose, pred_30, pred_60, pred_120)
+        max_forecast = max(curr_glucose, pred_30, pred_60, pred_120)
+
+        if min_forecast < 60 or max_forecast > 280 or adverse_prob >= 0.65:
+            alert_level = "CRITICAL"
+            alert_msg = f"Imminent glycemic crisis (Predicted {max_forecast:.0f} mg/dL, Risk: {adverse_prob:.1%})"
+        elif min_forecast < 70:
+            alert_level = "WARNING_HYPO"
+            alert_msg = f"Predicted hypoglycemia (<70 mg/dL). Check for sulfonylurea / basal insulin over-suppression."
+        elif max_forecast > 200 or adverse_prob >= 0.35:
+            alert_level = "WARNING_HYPER"
+            alert_msg = f"Elevated postprandial trajectory (>200 mg/dL). 15-min post-meal walk recommended to stimulate GLUT4."
+        else:
+            alert_level = "NORMAL"
+            alert_msg = "Type 2 glycemic trajectory well within personalized target range."
+
+        # Trend direction
+        delta_trend = pred_30 - curr_glucose
+        if delta_trend > 15:
+            trend = "RISING_FAST"
+        elif delta_trend > 5:
+            trend = "RISING"
+        elif delta_trend < -15:
+            trend = "FALLING_FAST"
+        elif delta_trend < -5:
+            trend = "FALLING"
+        else:
+            trend = "STABLE"
+
+        cdss_alerts = self.cdss.evaluate_patient(profile, window_df)
+
+        return {
+            "patient_id": patient_id,
+            "patient_name": profile.get("name", "Unknown"),
+            "timestamp": curr_time,
+            "diabetes_type": "Type 2",
+            "current_glucose": round(curr_glucose, 1),
+            "trend": trend,
+            "forecast": {
+                "t_plus_30min": round(pred_30, 1),
+                "t_plus_60min": round(pred_60, 1),
+                "t_plus_120min": round(pred_120, 1)
+            },
+            "adverse_risk_prob": round(adverse_prob, 3),
+            "alert_level": alert_level,
+            "alert_message": alert_msg,
+            "cdss_alerts": cdss_alerts,
+            "ehr_context": {
+                "hba1c": profile.get("hba1c_pct"),
+                "homa_ir": homa_ir,
+                "homa_beta": homa_beta,
+                "oral_medications": profile.get("oral_medications", "Metformin"),
+                "target_tir_pct": profile.get("target_tir_pct", 70),
+                "risk_tier": profile.get("clinical_risk_tier")
+            }
+        }
+
     def predict_state(self, patient_id: str, window_df: pd.DataFrame) -> Dict[str, Any]:
         """
         Primary Digital Twin inference:
-        Takes patient EHR and recent 2-hour window -> Outputs current reading,
-        +30m/+60m/+120m trajectory, adverse risk score, and alert level.
+        Takes patient EHR and recent 2-hour window -> Routes to T1D ML model or T2D Forecaster.
+        Outputs current reading, +30m/+60m/+120m trajectory, adverse risk score, alert level, and CDSS alerts.
         """
         profile = self.patients.get(patient_id, {})
+        diabetes_type = profile.get("diabetes_type", "Type 1")
+
+        if diabetes_type == "Type 2":
+            return self._predict_state_t2d(patient_id, window_df, profile)
+
+        # Type 1 Diabetes Inference Path:
         curr_glucose = float(window_df.iloc[-1]["glucose"])
         curr_time = str(window_df.iloc[-1]["timestamp"])
 
@@ -149,8 +262,7 @@ class DigitalTwinEngine:
         feat_m2 = self._extract_model2_features(window_df)
         adverse_prob = float(self.model_m2.predict_proba(feat_m2[self.feature_cols_m2])[0][1])
 
-        # 3. Clinical Alert Logic (Ensemble Fusion)
-        # Check for immediate or forecasted extremes
+        # 3. Clinical Alert Logic
         min_forecast = min(curr_glucose, pred_30, pred_60, pred_120)
         max_forecast = max(curr_glucose, pred_30, pred_60, pred_120)
 
@@ -180,10 +292,14 @@ class DigitalTwinEngine:
         else:
             trend = "STABLE"
 
+        # 4. CDSS Pattern Alerts
+        cdss_alerts = self.cdss.evaluate_patient(profile, window_df)
+
         return {
             "patient_id": patient_id,
             "patient_name": profile.get("name", "Unknown"),
             "timestamp": curr_time,
+            "diabetes_type": "Type 1",
             "current_glucose": round(curr_glucose, 1),
             "trend": trend,
             "forecast": {
@@ -194,25 +310,27 @@ class DigitalTwinEngine:
             "adverse_risk_prob": round(adverse_prob, 3),
             "alert_level": alert_level,
             "alert_message": alert_msg,
+            "cdss_alerts": cdss_alerts,
             "ehr_context": {
                 "hba1c": profile.get("hba1c_pct"),
                 "isf": profile.get("isf_mg_dl_per_unit"),
                 "icr": profile.get("icr_grams_per_unit"),
+                "basal_rate": profile.get("basal_rate_u_hr"),
                 "risk_tier": profile.get("clinical_risk_tier")
             }
         }
 
     def simulate_what_if(self, patient_id: str, window_df: pd.DataFrame,
                          carbs_g: float = 0.0, bolus_u: float = 0.0,
-                         walk_min: float = 0.0) -> Dict[str, Any]:
+                         walk_min: float = 0.0, oral_med_taken: bool = True) -> Dict[str, Any]:
         """
         The "What-If" Counterfactual Simulator:
         Computes the expected glucose trajectory difference if the user takes an action NOW.
-        Uses patient-specific ISF and ICR combined with pharmacokinetic absorption curves.
+        Supports both Type 1 (Carbs/Bolus/Walk) and Type 2 (Carbs/Walk/Oral Meds).
         """
         profile = self.patients.get(patient_id, {})
-        isf = profile.get("isf_mg_dl_per_unit", 45)
-        icr = profile.get("icr_grams_per_unit", 10)
+        diabetes_type = profile.get("diabetes_type", "Type 1")
+        is_t2d = (diabetes_type == "Type 2")
 
         # 1. Get baseline forecast (no action taken)
         baseline = self.predict_state(patient_id, window_df)
@@ -223,48 +341,83 @@ class DigitalTwinEngine:
             baseline["forecast"]["t_plus_120min"],
         ]
 
-        # 2. Pharmacokinetic/pharmacodynamic adjustments over horizons (0, 30m, 60m, 120m)
-        # Absorption fraction profiles at [0, 30min, 60min, 120min]:
-        carb_absorption_frac = [0.0, 0.35, 0.70, 0.95]
-        insulin_action_frac = [0.0, 0.15, 0.50, 0.85]
-        exercise_burn_factor = [0.0, 0.40, 0.80, 1.00]  # glucose drop per 10min walk
-
         simulated_curve = []
-        for i in range(4):
-            # Carbs raise glucose: (carbs / ICR) * ISF * fraction
-            carb_effect = (carbs_g / icr) * isf * carb_absorption_frac[i]
-            # Insulin lowers glucose: bolus * ISF * fraction
-            insulin_effect = bolus_u * isf * insulin_action_frac[i]
-            # Walking lowers glucose: approx 0.8 mg/dL per min * isf ratio * fraction
-            walk_effect = (walk_min * 0.8 * (isf / 45.0)) * exercise_burn_factor[i]
 
-            net_delta = carb_effect - insulin_effect - walk_effect
-            projected = max(40.0, min(400.0, base_curve[i] + net_delta))
-            simulated_curve.append(round(projected, 1))
+        if is_t2d:
+            # Type 2 Counterfactual Dynamics:
+            homa_ir = float(profile.get("homa_ir", 3.8))
+            carb_frac = [0.0, 0.25, 0.70, 0.95]
+            walk_frac = [0.0, 0.40, 0.85, 1.00]
 
-        # Evaluate risk of simulated action
-        sim_min = min(simulated_curve)
-        sim_max = max(simulated_curve)
+            for i in range(4):
+                # Carbs raise glucose, attenuated if oral medication was taken (e.g. SGLT2i/Metformin)
+                med_blunting = 0.80 if oral_med_taken else 1.0
+                carb_effect = (carbs_g * 1.55 * (homa_ir / 2.8) * med_blunting) * carb_frac[i]
 
-        recommendation = "Safe to proceed."
-        safety_flag = "SAFE"
-        if sim_min < 70:
-            safety_flag = "DANGER_HYPO"
-            recommendation = (f"Caution: This action will cause hypoglycemia (projected low of {sim_min} mg/dL). "
-                              f"Reduce insulin bolus by {round((70 - sim_min)/isf, 1)} U or add 15g carbs.")
-        elif sim_max > 220:
-            safety_flag = "WARN_HYPER"
-            suggested_correction = round((sim_max - 140) / isf, 1)
-            recommendation = (f"Notice: Post-action glucose may spike to {sim_max} mg/dL. "
-                              f"Suggested correction: +{suggested_correction} U bolus or 20-min post-meal walk.")
+                # Walking lowers glucose via insulin-independent GLUT4 uptake
+                walk_effect = (walk_min * 1.15) * walk_frac[i]
+
+                # If bolus was provided (e.g. advanced T2D on basal-bolus)
+                bolus_effect = (bolus_u * (38.0 / (homa_ir / 2.5))) * [0.0, 0.15, 0.50, 0.85][i]
+
+                net_delta = carb_effect - walk_effect - bolus_effect
+                projected = max(45.0, min(390.0, base_curve[i] + net_delta))
+                simulated_curve.append(round(projected, 1))
+
+            sim_min = min(simulated_curve)
+            sim_max = max(simulated_curve)
+
+            if sim_min < 70:
+                safety_flag = "DANGER_HYPO"
+                recommendation = f"Hypoglycemia risk ({sim_min} mg/dL). Reduce post-meal exercise or take 15g carbs."
+            elif sim_max > 220:
+                safety_flag = "WARN_HYPER"
+                recommendation = f"Projected peak of {sim_max} mg/dL. A 20-min post-meal walk is recommended to stimulate GLUT-4 clearance."
+            else:
+                safety_flag = "SAFE"
+                recommendation = "Optimal glycemic trajectory. Post-meal glucose expected to remain within target range."
+        else:
+            # Type 1 Counterfactual Dynamics:
+            isf = float(profile.get("isf_mg_dl_per_unit", 45))
+            icr = float(profile.get("icr_grams_per_unit", 10))
+
+            carb_absorption_frac = [0.0, 0.35, 0.70, 0.95]
+            insulin_action_frac = [0.0, 0.15, 0.50, 0.85]
+            exercise_burn_factor = [0.0, 0.40, 0.80, 1.00]
+
+            for i in range(4):
+                carb_effect = (carbs_g / icr) * isf * carb_absorption_frac[i]
+                insulin_effect = bolus_u * isf * insulin_action_frac[i]
+                walk_effect = (walk_min * 0.8 * (isf / 45.0)) * exercise_burn_factor[i]
+
+                net_delta = carb_effect - insulin_effect - walk_effect
+                projected = max(40.0, min(400.0, base_curve[i] + net_delta))
+                simulated_curve.append(round(projected, 1))
+
+            sim_min = min(simulated_curve)
+            sim_max = max(simulated_curve)
+
+            safety_flag = "SAFE"
+            recommendation = "Safe to proceed."
+            if sim_min < 70:
+                safety_flag = "DANGER_HYPO"
+                recommendation = (f"Caution: This action will cause hypoglycemia (projected low of {sim_min} mg/dL). "
+                                  f"Reduce insulin bolus by {round((70 - sim_min)/isf, 1)} U or add 15g carbs.")
+            elif sim_max > 220:
+                safety_flag = "WARN_HYPER"
+                suggested_correction = round((sim_max - 140) / isf, 1)
+                recommendation = (f"Notice: Post-action glucose may spike to {sim_max} mg/dL. "
+                                  f"Suggested correction: +{suggested_correction} U bolus or 20-min post-meal walk.")
 
         return {
             "patient_id": patient_id,
             "patient_name": profile.get("name", "Unknown"),
+            "diabetes_type": diabetes_type,
             "action_evaluated": {
                 "carbs_added_g": carbs_g,
                 "bolus_added_u": bolus_u,
-                "walk_duration_min": walk_min
+                "walk_duration_min": walk_min,
+                "oral_med_taken": oral_med_taken
             },
             "horizons_min": [0, 30, 60, 120],
             "baseline_trajectory": base_curve,

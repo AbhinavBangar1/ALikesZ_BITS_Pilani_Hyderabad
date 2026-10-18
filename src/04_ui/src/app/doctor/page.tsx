@@ -7,6 +7,7 @@ import PatientProfileCard, { PatientEHR } from "@/components/doctor/PatientProfi
 import AdverseRiskCard from "@/components/doctor/AdverseRiskCard";
 import ForecastCard, { TwinForecast } from "@/components/doctor/ForecastCard";
 import TelemetryChart, { TelemetryRecord } from "@/components/telemetry/TelemetryChart";
+import CDSSActionCard, { CDSSAlert } from "@/components/doctor/CDSSActionCard";
 
 export default function DoctorPortal() {
   const [patients, setPatients] = useState<Patient[]>([]);
@@ -18,6 +19,8 @@ export default function DoctorPortal() {
   const [ehr, setEhr] = useState<PatientEHR | null>(null);
   const [stream, setStream] = useState<TelemetryRecord[]>([]);
   const [forecast, setForecast] = useState<TwinForecast | null>(null);
+  const [cdssAlerts, setCdssAlerts] = useState<CDSSAlert[]>([]);
+  const [liveStreaming, setLiveStreaming] = useState<boolean>(false);
 
   // 1. Initial cohort load
   useEffect(() => {
@@ -38,36 +41,134 @@ export default function DoctorPortal() {
     loadCohort();
   }, [selectedId]);
 
-  // 2. Selected patient detail load
+  // Fetch detail for selected patient
+  const fetchPatientDetail = async (id: string) => {
+    try {
+      const [ehrRes, streamRes, forecastRes, cdssRes] = await Promise.all([
+        fetch(`http://127.0.0.1:8000/api/patient/${id}/ehr`),
+        fetch(`http://127.0.0.1:8000/api/patient/${id}/stream?points=80`),
+        fetch(`http://127.0.0.1:8000/api/patient/${id}/twin-forecast`),
+        fetch(`http://127.0.0.1:8000/api/patient/${id}/cdss`),
+      ]);
+
+      if (ehrRes.ok) setEhr(await ehrRes.json());
+      if (streamRes.ok) {
+        const streamData = await streamRes.json();
+        setStream(streamData.data || []);
+      }
+      if (forecastRes.ok) setForecast(await forecastRes.json());
+      if (cdssRes.ok) {
+        const cdssData = await cdssRes.json();
+        setCdssAlerts(cdssData.alerts || []);
+      }
+    } catch (err) {
+      console.error("Failed to fetch patient detail:", err);
+    }
+  };
+
+  // 2. Selected patient initial detail load
   useEffect(() => {
     if (!selectedId) return;
+    fetchPatientDetail(selectedId);
+  }, [selectedId]);
 
-    async function fetchPatientDetail() {
+  // 3. Live telemetry ticker & polling (15-second high-frequency simulation)
+  useEffect(() => {
+    if (!selectedId || !liveStreaming) return;
+
+    const timer = setInterval(async () => {
       try {
-        const [ehrRes, streamRes, forecastRes] = await Promise.all([
-          fetch(`http://127.0.0.1:8000/api/patient/${selectedId}/ehr`),
-          fetch(`http://127.0.0.1:8000/api/patient/${selectedId}/stream?points=72`),
+        // Advance simulation tick by 15 seconds
+        await fetch(`http://127.0.0.1:8000/api/patient/${selectedId}/stream/tick`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        });
+
+        // Pull latest stream, forecast, and CDSS alerts
+        const [streamRes, forecastRes, cdssRes] = await Promise.all([
+          fetch(`http://127.0.0.1:8000/api/patient/${selectedId}/stream?points=80`),
           fetch(`http://127.0.0.1:8000/api/patient/${selectedId}/twin-forecast`),
+          fetch(`http://127.0.0.1:8000/api/patient/${selectedId}/cdss`),
         ]);
 
-        if (ehrRes.ok) setEhr(await ehrRes.json());
         if (streamRes.ok) {
           const streamData = await streamRes.json();
           setStream(streamData.data || []);
         }
         if (forecastRes.ok) setForecast(await forecastRes.json());
+        if (cdssRes.ok) {
+          const cdssData = await cdssRes.json();
+          setCdssAlerts(cdssData.alerts || []);
+        }
       } catch (err) {
-        console.error("Failed to fetch patient detail:", err);
+        console.error("Live streaming tick failed:", err);
       }
-    }
+    }, 3000);
 
-    fetchPatientDetail();
-  }, [selectedId]);
+    return () => clearInterval(timer);
+  }, [selectedId, liveStreaming]);
+
+  // Manual tick handler
+  const handleManualTick = async () => {
+    if (!selectedId) return;
+    try {
+      await fetch(`http://127.0.0.1:8000/api/patient/${selectedId}/stream/tick`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      fetchPatientDetail(selectedId);
+    } catch (err) {
+      console.error("Manual tick failed:", err);
+    }
+  };
+
+  // CDSS Action Handlers
+  const handleAcknowledgeAlert = async (patternId: string) => {
+    try {
+      await fetch(`http://127.0.0.1:8000/api/patient/${selectedId}/cdss/acknowledge`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pattern_id: patternId }),
+      });
+      const res = await fetch(`http://127.0.0.1:8000/api/patient/${selectedId}/cdss`);
+      if (res.ok) {
+        const cdssData = await res.json();
+        setCdssAlerts(cdssData.alerts || []);
+      }
+    } catch (err) {
+      console.error("Failed to acknowledge CDSS alert:", err);
+    }
+  };
+
+  const handleDismissAlert = async (patternId: string) => {
+    try {
+      await fetch(`http://127.0.0.1:8000/api/patient/${selectedId}/cdss/dismiss`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pattern_id: patternId }),
+      });
+      const res = await fetch(`http://127.0.0.1:8000/api/patient/${selectedId}/cdss`);
+      if (res.ok) {
+        const cdssData = await res.json();
+        setCdssAlerts(cdssData.alerts || []);
+      }
+    } catch (err) {
+      console.error("Failed to dismiss CDSS alert:", err);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-white text-slate-900 flex flex-col font-sans antialiased">
-      {/* Top Header: Logo + 'Kiko infinity' | Monospace Timestamp */}
-      <DoctorHeader />
+      {/* Top Header: Logo + 'Kiko' in Editorial Serif | Monospace Timestamp & Live Controller */}
+      <DoctorHeader
+        selectedPatientId={selectedId}
+        selectedPatientName={ehr?.name}
+        liveStreaming={liveStreaming}
+        onToggleLive={() => setLiveStreaming((prev) => !prev)}
+        onTick={handleManualTick}
+      />
 
       {/* Main Edge-to-Edge Grid (Zero gaps, continuous 1px dividing borders) */}
       <main className="flex-1 flex flex-col lg:flex-row w-full">
@@ -85,9 +186,9 @@ export default function DoctorPortal() {
           />
         </section>
 
-        {/* Remaining 80% area: Structured into 2 synchronized rows so the horizontal divider is 100% equal */}
+        {/* Remaining 80% area */}
         <section className="w-full lg:w-[80%] flex flex-col">
-          {/* Top Row: Patient Profile (50% of screen = 62.5% of 80%) | Adverse Event Risk (30% of screen = 37.5% of 80%) */}
+          {/* Deck 1: Patient Profile (62.5%) | Adverse Event Risk (37.5%) */}
           <div className="flex flex-col lg:flex-row border-b border-slate-200">
             <div className="w-full lg:w-[62.5%] border-r border-slate-200 flex flex-col">
               <PatientProfileCard
@@ -104,8 +205,8 @@ export default function DoctorPortal() {
             </div>
           </div>
 
-          {/* Bottom Row: Live Telemetry Chart (62.5%) | 2-Hour Predictive Trajectory (37.5%) */}
-          <div className="flex-1 flex flex-col lg:flex-row">
+          {/* Deck 2: Live Telemetry Chart (62.5%) | 2-Hour Predictive Trajectory (37.5%) */}
+          <div className="flex flex-col lg:flex-row border-b border-slate-200">
             <div className="w-full lg:w-[62.5%] border-r border-slate-200 flex flex-col">
               <TelemetryChart
                 stream={stream}
@@ -118,6 +219,16 @@ export default function DoctorPortal() {
                 stream={stream}
               />
             </div>
+          </div>
+
+          {/* Deck 3: Clinical Decision Support System (CDSS) Action Center */}
+          <div className="w-full flex flex-col">
+            <CDSSActionCard
+              patientId={selectedId}
+              alerts={cdssAlerts}
+              onAcknowledge={handleAcknowledgeAlert}
+              onDismiss={handleDismissAlert}
+            />
           </div>
         </section>
       </main>

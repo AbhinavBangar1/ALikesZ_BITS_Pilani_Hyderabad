@@ -20,7 +20,9 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.append(str(ROOT / "src" / "02_twin_engine"))
+sys.path.append(str(ROOT / "src" / "01_simulator"))
 from twin_core import DigitalTwinEngine
+from wearable_stream_generator import CohortLiveStreamManager
 
 app = FastAPI(
     title="Type 1 Diabetes Digital Twin Platform API",
@@ -37,17 +39,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global Twin Engine instance
+# Global Twin Engine and Live Stream instances
 twin_engine: Optional[DigitalTwinEngine] = None
+live_manager: Optional[CohortLiveStreamManager] = None
 STREAM_DIR = ROOT / "data" / "synthetic_cohort" / "wearable_streams"
 
 
 @app.on_event("startup")
 def load_engine():
-    global twin_engine
+    global twin_engine, live_manager
     print("[API Startup] Loading Digital Twin Engine and trained weights...")
     twin_engine = DigitalTwinEngine()
     print("[API Startup] Digital Twin Engine ready.")
+    print("[API Startup] Initializing Cohort Live Stream Manager...")
+    live_manager = CohortLiveStreamManager()
+    print(f"[API Startup] Live Stream Manager initialized for {len(live_manager.simulators)} patients.")
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
@@ -55,15 +61,43 @@ class WhatIfRequest(BaseModel):
     carbs_g: float = Field(0.0, description="Carbohydrates in grams to simulate consuming.")
     bolus_u: float = Field(0.0, description="Rapid-acting insulin bolus units to administer.")
     walk_min: float = Field(0.0, description="Walking / exercise duration in minutes.")
+    oral_med_taken: bool = Field(True, description="Whether oral medication was taken (Type 2).")
+
+
+class CDSSActionRequest(BaseModel):
+    pattern_id: str = Field(..., description="The unique pattern ID to acknowledge or dismiss.")
+
+
+class TickRequest(BaseModel):
+    carbs_g: Optional[float] = Field(0.0, description="Carbohydrates in grams to simulate consuming.")
+    bolus_u: Optional[float] = Field(0.0, description="Rapid-acting insulin bolus units to administer.")
+    walk_min: Optional[float] = Field(0.0, description="Walking / exercise duration in minutes.")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-def get_patient_stream(patient_id: str, limit: int = 48) -> pd.DataFrame:
+def get_patient_stream(patient_id: str, limit: int = 60) -> pd.DataFrame:
     stream_path = STREAM_DIR / f"{patient_id}_stream.csv"
     if not stream_path.exists():
         raise HTTPException(status_code=404, detail=f"No wearable stream found for patient {patient_id}")
     df = pd.read_csv(stream_path)
     return df.tail(limit)
+
+
+def get_resampled_patient_stream(patient_id: str, num_5min_steps: int = 24) -> pd.DataFrame:
+    """
+    Downsamples the 15-second high-frequency stream to 5-minute ticks (every 20th row)
+    so the 2-hour clinical horizon matches Model 1 and Model 2 expectations.
+    """
+    stream_path = STREAM_DIR / f"{patient_id}_stream.csv"
+    if not stream_path.exists():
+        raise HTTPException(status_code=404, detail=f"No wearable stream found for patient {patient_id}")
+    needed_rows = num_5min_steps * 20 + 20
+    df = pd.read_csv(stream_path).tail(needed_rows)
+    if len(df) < num_5min_steps:
+        return df
+    # Sample every 20th row backwards from the latest reading
+    df_5m = df.iloc[::-20].iloc[::-1].tail(num_5min_steps).reset_index(drop=True)
+    return df_5m
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -89,7 +123,7 @@ def list_patients():
     roster = []
     for pid, profile in twin_engine.patients.items():
         try:
-            stream_df = get_patient_stream(pid, limit=24)
+            stream_df = get_resampled_patient_stream(pid, num_5min_steps=24)
             state = twin_engine.predict_state(pid, stream_df)
             curr_g = state["current_glucose"]
             trend = state["trend"]
@@ -108,11 +142,14 @@ def list_patients():
             "gender": profile["gender"],
             "city": profile["city"],
             "hba1c": profile["hba1c_pct"],
-            "diabetes_type": profile.get("diabetes_type", "Type 1" if int(pid.split("-")[-1]) <= 8 else "Type 2"),
+            "diabetes_type": profile.get("diabetes_type", "Type 2" if "T2D" in pid else "Type 1"),
             "risk_tier": profile["clinical_risk_tier"],
             "hypo_unawareness": profile["hypo_unawareness"],
             "cgm_device": profile["cgm_device"],
             "delivery_system": profile["delivery_system"],
+            "homa_ir": profile.get("homa_ir"),
+            "oral_medications": profile.get("oral_medications"),
+            "target_tir_pct": profile.get("target_tir_pct"),
             "latest_glucose": curr_g,
             "trend": trend,
             "alert_level": alert_lvl,
@@ -133,6 +170,49 @@ def get_patient_ehr(patient_id: str):
     return twin_engine.patients[patient_id]
 
 
+@app.get("/api/patient/{patient_id}/cdss")
+def get_patient_cdss(patient_id: str):
+    """Returns active clinical decision support alerts for the patient."""
+    if not twin_engine or patient_id not in twin_engine.patients:
+        raise HTTPException(status_code=404, detail="Patient profile not found.")
+    stream_df = get_resampled_patient_stream(patient_id, num_5min_steps=24)
+    profile = twin_engine.patients[patient_id]
+    alerts = twin_engine.cdss.evaluate_patient(profile, stream_df)
+    return {
+        "patient_id": patient_id,
+        "count": len(alerts),
+        "alerts": alerts
+    }
+
+
+@app.post("/api/patient/{patient_id}/cdss/acknowledge")
+def acknowledge_cdss_alert(patient_id: str, request: CDSSActionRequest):
+    """Clinician acknowledges a CDSS alert pattern."""
+    if not twin_engine:
+        raise HTTPException(status_code=500, detail="Twin engine not loaded.")
+    status = twin_engine.cdss.acknowledge_alert(patient_id, request.pattern_id)
+    return {
+        "status": "ok",
+        "patient_id": patient_id,
+        "pattern_id": request.pattern_id,
+        "alert_status": status
+    }
+
+
+@app.post("/api/patient/{patient_id}/cdss/dismiss")
+def dismiss_cdss_alert(patient_id: str, request: CDSSActionRequest):
+    """Clinician dismisses a CDSS alert pattern."""
+    if not twin_engine:
+        raise HTTPException(status_code=500, detail="Twin engine not loaded.")
+    status = twin_engine.cdss.dismiss_alert(patient_id, request.pattern_id)
+    return {
+        "status": "ok",
+        "patient_id": patient_id,
+        "pattern_id": request.pattern_id,
+        "alert_status": status
+    }
+
+
 @app.get("/api/patient/{patient_id}/stream")
 def get_stream(patient_id: str, points: int = 36):
     """
@@ -147,6 +227,22 @@ def get_stream(patient_id: str, points: int = 36):
     }
 
 
+@app.get("/api/patient/{patient_id}/heart-rate/live")
+def get_live_heart_rate(patient_id: str, seconds: int = 60):
+    """
+    Returns continuous 1-second cardiovascular telemetry (instantaneous HR, RR intervals,
+    autonomic state) for live high-frequency cardiac monitoring.
+    """
+    if not live_manager or patient_id not in live_manager.simulators:
+        raise HTTPException(status_code=404, detail=f"Patient {patient_id} not found in live stream manager.")
+    data = live_manager.get_patient_live_hr(patient_id, seconds=min(300, max(10, seconds)))
+    return {
+        "patient_id": patient_id,
+        "count": len(data),
+        "data": data
+    }
+
+
 @app.get("/api/patient/{patient_id}/twin-forecast")
 def get_twin_forecast(patient_id: str):
     """
@@ -157,7 +253,7 @@ def get_twin_forecast(patient_id: str):
     if not twin_engine or patient_id not in twin_engine.patients:
         raise HTTPException(status_code=404, detail="Patient profile not found.")
 
-    stream_df = get_patient_stream(patient_id, limit=24)
+    stream_df = get_resampled_patient_stream(patient_id, num_5min_steps=24)
     state = twin_engine.predict_state(patient_id, stream_df)
     return state
 
@@ -167,20 +263,62 @@ def simulate_action(patient_id: str, request: WhatIfRequest):
     """
     Counterfactual "What-If" simulator:
     Compares baseline trajectory with the intervention trajectory
-    (carbs, bolus, exercise) using the patient's individual ISF/ICR.
+    (carbs, bolus, exercise, oral meds) using physiological twin kinetics.
     """
     if not twin_engine or patient_id not in twin_engine.patients:
         raise HTTPException(status_code=404, detail="Patient profile not found.")
 
-    stream_df = get_patient_stream(patient_id, limit=24)
+    stream_df = get_resampled_patient_stream(patient_id, num_5min_steps=24)
     result = twin_engine.simulate_what_if(
         patient_id=patient_id,
         window_df=stream_df,
         carbs_g=request.carbs_g,
         bolus_u=request.bolus_u,
-        walk_min=request.walk_min
+        walk_min=request.walk_min,
+        oral_med_taken=request.oral_med_taken
     )
     return result
+
+
+@app.post("/api/patient/{patient_id}/stream/tick")
+def tick_patient_stream(patient_id: str, request: Optional[TickRequest] = None):
+    """
+    Advances telemetry simulation for patient by 5 minutes.
+    Can optionally accept manual carbs, bolus, or exercise intervention.
+    """
+    if not live_manager:
+        raise HTTPException(status_code=500, detail="Live stream manager not initialized.")
+    carbs = request.carbs_g if request and request.carbs_g is not None else 0.0
+    bolus = request.bolus_u if request and request.bolus_u is not None else 0.0
+    walk = request.walk_min if request and request.walk_min is not None else 0.0
+
+    try:
+        record = live_manager.tick_patient(patient_id, carbs_g=carbs, bolus_u=bolus, walk_min=walk)
+        return {
+            "status": "ok",
+            "patient_id": patient_id,
+            "record": record
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to tick patient stream: {str(e)}")
+
+
+@app.post("/api/stream/tick-all")
+def tick_all_cohort():
+    """
+    Advances telemetry simulation for all 15 cohort patients simultaneously by 5 minutes.
+    """
+    if not live_manager:
+        raise HTTPException(status_code=500, detail="Live stream manager not initialized.")
+    try:
+        records = live_manager.tick_all()
+        return {
+            "status": "ok",
+            "total_updated": len(records),
+            "records": records
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to tick cohort streams: {str(e)}")
 
 
 # ── UI Page Routes ────────────────────────────────────────────────────────────

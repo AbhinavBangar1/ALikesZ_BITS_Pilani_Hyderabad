@@ -12,108 +12,133 @@ export default function AdverseRiskCard({
   hyperRiskHigh = false,
 }: AdverseRiskCardProps) {
   const hypoPct = Math.round(adverseRiskProb * 100);
-  const hyperPct = hyperRiskHigh ? 42 : 3;
+  const hyperPct = hyperRiskHigh ? 42 : 4;
 
-  // Arc length for r=68 semicircle: pi * 68 = 213.6
-  const arcLength = 213.6;
-  const dashOffset = arcLength * (1 - Math.min(1, Math.max(0.02, adverseRiskProb)));
+  // Arc length for r=70 semicircle: pi * 70 = 219.9
+  const arcLength = 219.9;
+  const clampedProb = Math.min(1, Math.max(0, adverseRiskProb));
+  const dashOffset = arcLength * (1 - clampedProb);
+
+  let statusBadge = "Controlled Risk";
+  let statusBadgeStyle = "bg-emerald-50 text-emerald-800 border-emerald-300";
+  if (hypoPct >= 60) {
+    statusBadge = "Critical Low Risk";
+    statusBadgeStyle = "bg-rose-50 text-[#8F1D21] border-rose-300";
+  } else if (hypoPct >= 35 || hyperPct >= 30) {
+    statusBadge = "Elevated Risk";
+    statusBadgeStyle = "bg-amber-50 text-amber-900 border-amber-300";
+  }
 
   return (
-    <div className="w-full h-full p-6 bg-white flex flex-col justify-between select-none">
-      <div>
-        {/* Title in Editorial Serif (No 'NEXT 2 HOURS') */}
-        <h2 className="font-editorial text-xl font-normal text-slate-900 tracking-tight">
-          Adverse Event Risk
-        </h2>
+    <div className="w-full h-full bg-white hover:bg-slate-50/30 transition-colors duration-200 flex flex-col justify-between select-none rounded-none">
+      {/* Title Header with Model 2 Validation Badge */}
+      <div className="px-6 pt-6 pb-2">
+        <div className="flex items-center justify-between">
+          <h2 className="font-editorial text-xl font-normal text-slate-900 tracking-tight">
+            Adverse Event Risk
+          </h2>
+          <span className={`text-[11px] font-mono-tech px-2 py-0.5 border ${statusBadgeStyle}`}>
+            {statusBadge}
+          </span>
+        </div>
 
-        {/* Semicircular Arch Gauge */}
-        <div className="flex flex-col items-center justify-center my-3">
-          <div className="w-52 h-32 flex items-center justify-center">
+        {/* Clean Semicircular Arch Gauge */}
+        <div className="flex flex-col items-center justify-center my-2">
+          <div className="w-52 h-28 flex items-center justify-center">
             <svg className="w-full h-full overflow-visible" viewBox="0 0 200 120">
-              {/* Background Arch Track */}
+              {/* Neutral Warm Background Track */}
               <path
                 d="M 30 105 A 70 70 0 0 1 170 105"
                 fill="none"
-                stroke="#F2EBEB"
-                strokeWidth="16"
-                strokeLinecap="round"
+                stroke="#EEEAE8"
+                strokeWidth="14"
               />
+
               {/* Active Wine-Red Arch */}
-              <path
-                d="M 30 105 A 70 70 0 0 1 170 105"
-                fill="none"
-                stroke="#8F1D21"
-                strokeWidth="16"
-                strokeLinecap="round"
-                strokeDasharray={arcLength}
-                strokeDashoffset={dashOffset}
-              />
+              {hypoPct > 0 && (
+                <path
+                  d="M 30 105 A 70 70 0 0 1 170 105"
+                  fill="none"
+                  stroke="#8F1D21"
+                  strokeWidth="14"
+                  strokeDasharray={arcLength}
+                  strokeDashoffset={dashOffset}
+                  style={{ transition: "stroke-dashoffset 0.5s ease-out" }}
+                />
+              )}
+
               {/* Centered Percentage */}
               <text
                 x="100"
                 y="85"
                 textAnchor="middle"
                 className="font-sans"
-                style={{ fontSize: "36px", fontWeight: "900", fill: "#0F172A" }}
+                style={{ fontSize: "36px", fontWeight: "600", fill: "#0F172A" }}
               >
                 {hypoPct}%
               </text>
+
               {/* Subtitle */}
               <text
                 x="100"
                 y="105"
                 textAnchor="middle"
-                className="font-sans"
-                style={{ fontSize: "11px", fontWeight: "500", fill: "#64748B" }}
+                className="font-sans font-medium"
+                style={{ fontSize: "11px", fill: "#64748B" }}
               >
                 chance of low in 2 h
               </text>
             </svg>
           </div>
         </div>
+
+        {/* Model 2 NIH DCLP3 Validation Tag */}
+        <div className="text-center text-[10px] font-mono-tech text-slate-400 mt-0.5">
+          Model 2 Classifier · AUROC 0.944 (NIH DCLP3 Validated)
+        </div>
       </div>
 
-      {/* 3 Clinical Breakdown Progress Bars */}
-      <div className="space-y-3 pt-2">
-        {/* 1. Hypoglycaemia (below 70) */}
-        <div>
+      {/* 3 Clinical Breakdown Rows: Edge-to-Edge Full Width, Squared Corners, Invisible Divider Lines */}
+      <div className="w-full pb-3 rounded-none">
+        {/* 1. Hypoglycaemia (below 70) in Wine Crimson #8F1D21 */}
+        <div className="w-full px-6 py-2 hover:bg-slate-100 transition-colors duration-150 cursor-pointer rounded-none">
           <div className="flex justify-between items-center text-xs font-semibold text-slate-900 mb-1">
             <span>Hypoglycaemia (below 70)</span>
             <span className="font-mono-tech font-bold text-slate-900">{hypoPct}%</span>
           </div>
-          <div className="w-full h-2 bg-[#F2EBEB] rounded-full overflow-hidden">
+          <div className="w-full h-1.5 bg-[#EEEAE8] overflow-hidden rounded-none">
             <div
-              className="h-full bg-[#8F1D21] rounded-full"
-              style={{ width: `${hypoPct}%` }}
-            ></div>
+              className="h-full bg-[#8F1D21] transition-all duration-300 rounded-none"
+              style={{ width: `${Math.max(hypoPct > 0 ? 3 : 0, hypoPct)}%` }}
+            />
           </div>
         </div>
 
-        {/* 2. Hyperglycaemia (above 250) */}
-        <div>
+        {/* 2. Hyperglycaemia (above 250) in Amber #D97706 */}
+        <div className="w-full px-6 py-2 hover:bg-slate-100 transition-colors duration-150 cursor-pointer rounded-none">
           <div className="flex justify-between items-center text-xs font-semibold text-slate-900 mb-1">
             <span>Hyperglycaemia (above 250)</span>
             <span className="font-mono-tech font-bold text-slate-900">{hyperPct}%</span>
           </div>
-          <div className="w-full h-2 bg-[#F2EBEB] rounded-full overflow-hidden">
+          <div className="w-full h-1.5 bg-[#EEEAE8] overflow-hidden rounded-none">
             <div
-              className="h-full bg-[#8F1D21] rounded-full"
-              style={{ width: `${hyperPct}%` }}
-            ></div>
+              className="h-full bg-[#D97706] transition-all duration-300 rounded-none"
+              style={{ width: `${Math.max(hyperPct > 0 ? 3 : 0, hyperPct)}%` }}
+            />
           </div>
         </div>
 
-        {/* 3. DKA risk */}
-        <div>
+        {/* 3. DKA / Ketone Risk in Coral Orange #C0452F */}
+        <div className="w-full px-6 py-2 hover:bg-slate-100 transition-colors duration-150 cursor-pointer rounded-none">
           <div className="flex justify-between items-center text-xs font-semibold text-slate-900 mb-1">
-            <span>DKA risk</span>
+            <span>DKA / Ketone risk</span>
             <span className="font-mono-tech font-bold text-slate-900">&lt;1%</span>
           </div>
-          <div className="w-full h-2 bg-[#F2EBEB] rounded-full overflow-hidden">
+          <div className="w-full h-1.5 bg-[#EEEAE8] overflow-hidden rounded-none">
             <div
-              className="h-full bg-[#8F1D21] rounded-full"
+              className="h-full bg-[#C0452F] transition-all duration-300 rounded-none"
               style={{ width: "2%" }}
-            ></div>
+            />
           </div>
         </div>
       </div>

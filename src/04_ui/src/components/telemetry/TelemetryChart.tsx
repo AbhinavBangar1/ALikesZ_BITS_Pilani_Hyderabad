@@ -38,14 +38,27 @@ function pointsToCubicBezierPath(pts: { x: number; y: number }[]): string {
   return path;
 }
 
+// Format timestamp to clean HH:mm:ss for 15-second high-frequency telemetry
+function formatTimestamp(ts: string | undefined): string {
+  if (!ts) return "";
+  if (ts.includes(" ")) {
+    return ts.split(" ")[1].slice(0, 8);
+  }
+  if (ts.includes("T")) {
+    return ts.split("T")[1].slice(0, 8);
+  }
+  return ts.slice(0, 8);
+}
+
 export default function TelemetryChart({ stream }: TelemetryChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Dynamic window points (default ~1 hour, 12 points at 5 min intervals)
-  const [windowPoints, setWindowPoints] = useState<number>(18);
+  // Dynamic window points for 15-second telemetry (default 40 points = 10 minutes)
+  const [windowPoints, setWindowPoints] = useState<number>(40);
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const totalStream = useMemo(() => stream || [], [stream]);
 
-  // Non-intrusive mousewheel listener to zoom window dynamically without toolbars
+  // Non-intrusive mousewheel listener to zoom window dynamically
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -54,9 +67,9 @@ export default function TelemetryChart({ stream }: TelemetryChartProps) {
       e.preventDefault();
       const delta = e.deltaY;
       setWindowPoints((prev) => {
-        const step = delta > 0 ? 2 : -2;
-        const maxPts = Math.max(12, totalStream.length || 36);
-        const minPts = 6;
+        const step = delta > 0 ? 4 : -4;
+        const maxPts = Math.max(20, totalStream.length || 80);
+        const minPts = 12;
         return Math.max(minPts, Math.min(maxPts, prev + step));
       });
     };
@@ -72,7 +85,7 @@ export default function TelemetryChart({ stream }: TelemetryChartProps) {
     return totalStream.slice(-windowPoints);
   }, [totalStream, windowPoints]);
 
-  // Chart dimensions matching reference image
+  // Chart layout dimensions
   const svgWidth = 600;
   const svgHeight = 220;
   const padLeft = 45;
@@ -82,33 +95,94 @@ export default function TelemetryChart({ stream }: TelemetryChartProps) {
   const plotWidth = svgWidth - padLeft - padRight;
   const plotHeight = svgHeight - padTop - padBottom;
 
-  // Coordinate scales matching image: Y ranges 70 to 250
-  const minY = 70;
-  const maxY = 250;
+  // ── DYNAMIC Y-AXIS SCALE ──────────────────────────────────────────────────
+  const { minY, maxY, yTicks } = useMemo(() => {
+    if (visibleData.length === 0) {
+      return { minY: 60, maxY: 260, yTicks: [250, 180, 140, 100, 70] };
+    }
+
+    const glucoseVals = visibleData
+      .map((d) => d.glucose)
+      .filter((g) => g && !isNaN(g));
+
+    const rawMin = glucoseVals.length > 0 ? Math.min(...glucoseVals) : 70;
+    const rawMax = glucoseVals.length > 0 ? Math.max(...glucoseVals) : 180;
+
+    // Comfortably bracket the actual live telemetry and the target safe zone (70 - 140)
+    const paddedMin = Math.min(rawMin - 15, 60);
+    const paddedMax = Math.max(rawMax + 20, 160);
+
+    const calcMin = Math.max(30, Math.floor(paddedMin / 20) * 20);
+    const calcMax = Math.min(400, Math.ceil(paddedMax / 20) * 20);
+
+    // Pick 4-5 clean tick increments
+    const span = calcMax - calcMin;
+    const step = span > 180 ? 50 : span > 100 ? 40 : 25;
+    const ticks: number[] = [];
+    for (let v = calcMax; v >= calcMin; v -= step) {
+      ticks.push(v);
+    }
+    if (!ticks.includes(70) && calcMin <= 70 && calcMax >= 70) ticks.push(70);
+    if (!ticks.includes(140) && calcMin <= 140 && calcMax >= 140) ticks.push(140);
+
+    const uniqueTicks = Array.from(new Set(ticks)).sort((a, b) => b - a);
+    return { minY: calcMin, maxY: calcMax, yTicks: uniqueTicks };
+  }, [visibleData]);
 
   const getY = (val: number) => {
     const clamped = Math.max(minY, Math.min(maxY, val));
     return padTop + plotHeight - ((clamped - minY) / (maxY - minY)) * plotHeight;
   };
 
-  // Target safe zone band: 70 to 140 mg/dL
+  // Target safe zone band: 70 to 140 mg/dL dynamically mapped to current Y scale
   const targetTopY = getY(140);
   const targetBottomY = getY(70);
   const targetHeight = targetBottomY - targetTopY;
 
-  // Calculate points
+  // ── DYNAMIC X-AXIS SCALE ──────────────────────────────────────────────────
+  const xTicks = useMemo(() => {
+    if (visibleData.length === 0) {
+      return [
+        { label: "1:00", pct: 0, anchor: "start" },
+        { label: "9:00", pct: 0.25, anchor: "middle" },
+        { label: "12:00", pct: 0.5, anchor: "middle" },
+        { label: "15:00", pct: 0.75, anchor: "middle" },
+        { label: "20:00", pct: 1.0, anchor: "end" },
+      ];
+    }
+
+    const n = visibleData.length;
+    const indices = [
+      0,
+      Math.floor(n * 0.25),
+      Math.floor(n * 0.5),
+      Math.floor(n * 0.75),
+      n - 1,
+    ];
+
+    return indices.map((idx, i) => {
+      const pct = idx / Math.max(1, n - 1);
+      const timeStr = formatTimestamp(visibleData[idx]?.timestamp);
+      return {
+        label: i === 4 ? `${timeStr}` : timeStr,
+        pct,
+        anchor: i === 0 ? "start" : i === 4 ? "end" : "middle",
+      };
+    });
+  }, [visibleData]);
+
+  // Calculate coordinates for visible points
   const points = useMemo(() => {
     if (visibleData.length === 0) {
-      // Clean fallback demo points matching reference curve exactly
       return [
-        { x: padLeft, yG: getY(88), yHR: getY(80) },
-        { x: padLeft + plotWidth * 0.15, yG: getY(84), yHR: getY(78) },
-        { x: padLeft + plotWidth * 0.3, yG: getY(105), yHR: getY(82) },
-        { x: padLeft + plotWidth * 0.45, yG: getY(98), yHR: getY(84) },
-        { x: padLeft + plotWidth * 0.58, yG: getY(225), yHR: getY(118) },
-        { x: padLeft + plotWidth * 0.72, yG: getY(170), yHR: getY(122) },
-        { x: padLeft + plotWidth * 0.85, yG: getY(95), yHR: getY(92) },
-        { x: padLeft + plotWidth, yG: getY(102), yHR: getY(88) },
+        { x: padLeft, yG: getY(88), yHR: getY(80), steps: 0 },
+        { x: padLeft + plotWidth * 0.15, yG: getY(84), yHR: getY(78), steps: 40 },
+        { x: padLeft + plotWidth * 0.3, yG: getY(105), yHR: getY(82), steps: 120 },
+        { x: padLeft + plotWidth * 0.45, yG: getY(98), yHR: getY(84), steps: 90 },
+        { x: padLeft + plotWidth * 0.58, yG: getY(225), yHR: getY(118), steps: 250 },
+        { x: padLeft + plotWidth * 0.72, yG: getY(170), yHR: getY(122), steps: 80 },
+        { x: padLeft + plotWidth * 0.85, yG: getY(95), yHR: getY(92), steps: 30 },
+        { x: padLeft + plotWidth, yG: getY(102), yHR: getY(88), steps: 10 },
       ];
     }
 
@@ -116,9 +190,9 @@ export default function TelemetryChart({ stream }: TelemetryChartProps) {
       const x = padLeft + (i / Math.max(1, visibleData.length - 1)) * plotWidth;
       const yG = getY(d.glucose);
       const yHR = getY(d.heart_rate);
-      return { x, yG, yHR };
+      return { x, yG, yHR, steps: d.steps || 0 };
     });
-  }, [visibleData, plotWidth, padLeft]);
+  }, [visibleData, plotWidth, padLeft, minY, maxY]);
 
   const cgmPath = useMemo(() => {
     return pointsToCubicBezierPath(points.map((p) => ({ x: p.x, y: p.yG })));
@@ -128,14 +202,88 @@ export default function TelemetryChart({ stream }: TelemetryChartProps) {
     return pointsToCubicBezierPath(points.map((p) => ({ x: p.x, y: p.yHR })));
   }, [points]);
 
+  // Hovered data point
+  const hoveredData = useMemo(() => {
+    if (hoverIdx === null || hoverIdx < 0 || hoverIdx >= visibleData.length) return null;
+    return visibleData[hoverIdx];
+  }, [hoverIdx, visibleData]);
+
+  const hoveredPoint = useMemo(() => {
+    if (hoverIdx === null || hoverIdx < 0 || hoverIdx >= points.length) return null;
+    return points[hoverIdx];
+  }, [hoverIdx, points]);
+
+  const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    const svg = e.currentTarget;
+    const rect = svg.getBoundingClientRect();
+    const mouseX = ((e.clientX - rect.left) / rect.width) * svgWidth;
+
+    if (mouseX < padLeft - 10 || mouseX > padLeft + plotWidth + 10 || points.length === 0) {
+      setHoverIdx(null);
+      return;
+    }
+
+    let closestIdx = 0;
+    let minDiff = Infinity;
+    points.forEach((p, i) => {
+      const diff = Math.abs(p.x - mouseX);
+      if (diff < minDiff) {
+        minDiff = diff;
+        closestIdx = i;
+      }
+    });
+
+    setHoverIdx(closestIdx);
+  };
+
+  const handleMouseLeave = () => {
+    setHoverIdx(null);
+  };
+
   return (
-    <div ref={containerRef} className="w-full p-6 bg-white flex flex-col justify-center select-none">
+    <div
+      ref={containerRef}
+      className="w-full h-full p-6 bg-white hover:bg-slate-50/40 transition-colors duration-200 flex flex-col justify-between select-none cursor-pointer rounded-none"
+    >
+      {/* Card Header: Title + Live Readout */}
+      <div className="flex items-center justify-between pb-2 mb-1 border-b border-slate-100">
+        <div className="flex items-center gap-2">
+          <h2 className="font-editorial text-xl font-normal text-slate-900 tracking-tight">
+            Synchronized Multi-Modal Telemetry
+          </h2>
+          <span className="text-[10px] font-mono-tech px-2 py-0.5 border border-slate-300 text-slate-600 bg-slate-50 uppercase">
+            15s High-Frequency
+          </span>
+        </div>
+        <div className="flex items-center space-x-3 text-xs font-semibold pr-1">
+          <span className="text-[#2563EB] font-sans flex items-center gap-1">
+            <span className="w-2.5 h-2.5 bg-blue-600 inline-block" />
+            CGM{hoveredData ? `: ${hoveredData.glucose} mg/dL` : ""}
+          </span>
+          <span className="text-[#991B1B] font-sans flex items-center gap-1">
+            <span className="w-2.5 h-0.5 bg-red-700 inline-block" />
+            HR{hoveredData ? `: ${hoveredData.heart_rate} BPM` : ""}
+          </span>
+          <span className="text-[#7C3AED] font-sans flex items-center gap-1">
+            <span className="w-2.5 h-2.5 bg-purple-400 inline-block" />
+            Steps{hoveredData ? `: ${hoveredData.steps}` : ""}
+          </span>
+          {hoveredData && (
+            <span className="text-slate-700 font-mono-tech text-[11px] font-medium px-1.5 py-0.5 bg-slate-100 border border-slate-300">
+              {formatTimestamp(hoveredData.timestamp)}
+            </span>
+          )}
+        </div>
+      </div>
+
       <svg
-        className="w-full h-auto overflow-visible"
+        className="w-full h-auto overflow-visible cursor-crosshair"
         viewBox={`0 0 ${svgWidth} ${svgHeight}`}
+        onMouseMove={handleMouseMove}
+        onMouseLeave={handleMouseLeave}
       >
-        {/* Y Axis Guide Lines & Labels (250, 140, 100, 70) */}
-        {[250, 140, 100, 70].map((val) => {
+        {/* Dynamic Y Axis Guide Lines & Labels */}
+        {yTicks.map((val) => {
           const y = getY(val);
           return (
             <g key={val}>
@@ -159,7 +307,7 @@ export default function TelemetryChart({ stream }: TelemetryChartProps) {
           );
         })}
 
-        {/* Target Range Band (70 - 140 mg/dL): Light mint green safe zone */}
+        {/* Dynamic Target Range Band: Strictly Squared Corners */}
         <rect
           x={padLeft}
           y={targetTopY}
@@ -168,6 +316,26 @@ export default function TelemetryChart({ stream }: TelemetryChartProps) {
           fill="#D9EFE3"
           opacity="0.85"
         />
+
+        {/* Physical Activity Steps (Subtle Histogram Bars) */}
+        {points.map((pt, i) => {
+          const barH = Math.min(28, (pt.steps / 350) * 28);
+          if (barH <= 1) return null;
+          const barW = Math.max(4, plotWidth / points.length - 8);
+          const isHovered = hoverIdx === i;
+          return (
+            <rect
+              key={`step-${i}`}
+              x={pt.x - barW / 2}
+              y={padTop + plotHeight - barH}
+              width={barW}
+              height={barH}
+              fill={isHovered ? "#7C3AED" : "#C4B5FD"}
+              opacity={isHovered ? 1 : 0.6}
+              className="rounded-none transition-colors"
+            />
+          );
+        })}
 
         {/* Heart Rate Red Dashed Curve */}
         {hrPath && (
@@ -190,39 +358,89 @@ export default function TelemetryChart({ stream }: TelemetryChartProps) {
           />
         )}
 
-        {/* In-chart Curve Labels: 'CGM' and 'Heart rate' */}
-        <text
-          x={padLeft + plotWidth * 0.64}
-          y={getY(185)}
-          className="text-[10px] font-sans font-medium fill-[#2563EB]"
-        >
-          CGM
-        </text>
-        <text
-          x={padLeft + plotWidth * 0.82}
-          y={getY(115)}
-          className="text-[10px] font-sans font-medium fill-[#991B1B]"
-        >
-          Heart rate
-        </text>
+        {/* Interactive Hover Guides & Crosshairs */}
+        {hoveredPoint && hoveredData && (
+          <g className="pointer-events-none">
+            {/* Vertical Hairline Guide */}
+            <line
+              x1={hoveredPoint.x}
+              y1={padTop}
+              x2={hoveredPoint.x}
+              y2={padTop + plotHeight}
+              stroke="#64748B"
+              strokeWidth="1"
+              strokeDasharray="3 3"
+            />
 
-        {/* Bottom X Axis Labels: 1:00, 9:00, 12:00, 15:00, 20:00 */}
+            {/* CGM Active Dot */}
+            <circle
+              cx={hoveredPoint.x}
+              cy={hoveredPoint.yG}
+              r="5"
+              fill="#2563EB"
+              stroke="#FFFFFF"
+              strokeWidth="2"
+            />
+
+            {/* HR Active Dot */}
+            <circle
+              cx={hoveredPoint.x}
+              cy={hoveredPoint.yHR}
+              r="4.5"
+              fill="#991B1B"
+              stroke="#FFFFFF"
+              strokeWidth="2"
+            />
+
+            {/* Floating Squared Tooltip Badge */}
+            <g
+              transform={`translate(${
+                hoveredPoint.x > padLeft + plotWidth - 135
+                  ? hoveredPoint.x - 138
+                  : hoveredPoint.x + 12
+              }, ${Math.min(padTop + plotHeight - 70, Math.max(padTop - 5, hoveredPoint.yG - 35))})`}
+            >
+              <rect
+                x="0"
+                y="0"
+                width="126"
+                height="64"
+                fill="#0F172A"
+                opacity="0.95"
+                className="rounded-none shadow-md"
+              />
+              <rect x="0" y="0" width="3" height="64" fill="#2563EB" />
+              <text x="8" y="15" fill="#94A3B8" className="text-[10px] font-mono-tech font-medium">
+                {formatTimestamp(hoveredData.timestamp)}
+              </text>
+              <text x="8" y="30" fill="#60A5FA" className="text-[12px] font-semibold font-sans">
+                CGM: {hoveredData.glucose} <tspan fill="#93C5FD" className="text-[9px] font-normal">mg/dL</tspan>
+              </text>
+              <text x="8" y="44" fill="#F87171" className="text-[11px] font-semibold font-sans">
+                HR: {hoveredData.heart_rate} <tspan fill="#FCA5A5" className="text-[9px] font-normal">BPM</tspan>
+              </text>
+              <text x="8" y="57" fill="#C4B5FD" className="text-[10px] font-semibold font-sans">
+                Steps: {hoveredData.steps}
+              </text>
+            </g>
+          </g>
+        )}
+
+        {/* Dynamic Bottom X Axis Labels (Timeline) */}
         <g transform={`translate(0, ${padTop + plotHeight + 18})`}>
-          <text x={padLeft} textAnchor="start" className="text-[11px] font-sans fill-slate-700">
-            1:00
-          </text>
-          <text x={padLeft + plotWidth * 0.25} textAnchor="middle" className="text-[11px] font-sans fill-slate-700">
-            9:00
-          </text>
-          <text x={padLeft + plotWidth * 0.5} textAnchor="middle" className="text-[11px] font-sans fill-slate-700">
-            12:00
-          </text>
-          <text x={padLeft + plotWidth * 0.75} textAnchor="middle" className="text-[11px] font-sans fill-slate-700">
-            15:00
-          </text>
-          <text x={padLeft + plotWidth} textAnchor="end" className="text-[11px] font-sans fill-slate-700">
-            20:00
-          </text>
+          {xTicks.map((tick, i) => {
+            const xPos = padLeft + tick.pct * plotWidth;
+            return (
+              <text
+                key={`xtick-${i}`}
+                x={xPos}
+                textAnchor={tick.anchor as any}
+                className="text-[11px] font-sans fill-slate-700 font-medium"
+              >
+                {tick.label}
+              </text>
+            );
+          })}
         </g>
       </svg>
     </div>

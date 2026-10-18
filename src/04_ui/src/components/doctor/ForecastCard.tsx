@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import { TelemetryRecord } from "../telemetry/TelemetryChart";
 
 export interface TwinForecast {
@@ -9,6 +9,7 @@ export interface TwinForecast {
   alert_level: string;
   alert_message: string;
   adverse_risk_prob: number;
+  diabetes_type?: string;
   forecast: {
     t_plus_30min: number;
     t_plus_60min: number;
@@ -21,8 +22,9 @@ interface ForecastCardProps {
   stream: TelemetryRecord[];
 }
 
-export default function ForecastCard({ forecast }: ForecastCardProps) {
-  // Chart dimensions matching image
+export default function ForecastCard({ forecast, stream }: ForecastCardProps) {
+  const [hoveredPoint, setHoveredPoint] = useState<"30" | "60" | "120" | "now" | null>(null);
+
   const svgWidth = 400;
   const svgHeight = 220;
   const padLeft = 45;
@@ -32,42 +34,109 @@ export default function ForecastCard({ forecast }: ForecastCardProps) {
   const plotWidth = svgWidth - padLeft - padRight;
   const plotHeight = svgHeight - padTop - padBottom;
 
-  const minY = 70;
-  const maxY = 250;
+  const minY = 60;
+  const maxY = 260;
 
   const getY = (val: number) => {
     const clamped = Math.max(minY, Math.min(maxY, val));
     return padTop + plotHeight - ((clamped - minY) / (maxY - minY)) * plotHeight;
   };
 
-  // Values matching reference image curve
-  const yPast = getY(100);
-  const yNow = getY(160);
-  const y30 = getY(forecast?.forecast?.t_plus_30min || 205);
-  const y60 = getY(forecast?.forecast?.t_plus_60min || 185);
-  const y120 = getY(forecast?.forecast?.t_plus_120min || 115);
+  // Trajectory Anchor Points
+  const currG = forecast?.current_glucose || (stream.length > 0 ? stream[stream.length - 1].glucose : 160);
+  const pastG = stream.length >= 6 ? stream[stream.length - 6].glucose : currG - 10;
+  const val30 = forecast?.forecast?.t_plus_30min ?? (currG + 15);
+  const val60 = forecast?.forecast?.t_plus_60min ?? (currG + 8);
+  const val120 = forecast?.forecast?.t_plus_120min ?? (currG - 12);
+
+  const yPast = getY(pastG);
+  const yNow = getY(currG);
+  const y30 = getY(val30);
+  const y60 = getY(val60);
+  const y120 = getY(val120);
 
   const xPast = padLeft;
-  const xNow = padLeft + plotWidth * 0.25;
-  const x30 = padLeft + plotWidth * 0.5;
-  const x60 = padLeft + plotWidth * 0.75;
+  const xNow = padLeft + plotWidth * 0.22;
+  const x30 = padLeft + plotWidth * 0.48;
+  const x60 = padLeft + plotWidth * 0.74;
   const x120 = padLeft + plotWidth;
 
-  return (
-    <div className="w-full p-6 bg-white flex-1 flex flex-col justify-between select-none">
-      {/* Title in Editorial Serif (No badges, no subtext) */}
-      <h2 className="font-editorial text-xl font-normal text-slate-900 tracking-tight">
-        2-Hour Predictive Trajectory
-      </h2>
+  // 90% Confidence Uncertainty Envelope Bounds
+  const y30_upper = getY(val30 + 14);
+  const y30_lower = getY(val30 - 14);
+  const y60_upper = getY(val60 + 24);
+  const y60_lower = getY(val60 - 24);
+  const y120_upper = getY(val120 + 38);
+  const y120_lower = getY(val120 - 38);
 
-      {/* Trajectory Canvas (Exact match to image) */}
-      <div className="my-auto py-2">
+  // Target safe zone (70 to 140 mg/dL)
+  const safeTopY = getY(140);
+  const safeBottomY = getY(70);
+  const safeHeight = Math.max(0, safeBottomY - safeTopY);
+
+  // Dynamic triage status pill
+  let statusText = "Target Trajectory";
+  let statusBg = "bg-slate-100 text-slate-800 border-slate-300";
+  if (Math.min(val30, val60, val120) < 70) {
+    statusText = "Hypo Alert (<70 in ~40m)";
+    statusBg = "bg-rose-50 text-[#8F1D21] border-rose-300";
+  } else if (Math.max(val30, val60, val120) > 220) {
+    statusText = `Peak ${Math.round(Math.max(val30, val60, val120))} mg/dL`;
+    statusBg = "bg-amber-50 text-amber-900 border-amber-300";
+  }
+
+  return (
+    <div className="w-full h-full p-6 bg-white hover:bg-slate-50/30 transition-colors duration-200 flex flex-col justify-between select-none rounded-none">
+      {/* Title & Dynamic Status Badge */}
+      <div className="flex items-center justify-between">
+        <h2 className="font-editorial text-xl font-normal text-slate-900 tracking-tight">
+          2-Hour Predictive Trajectory
+        </h2>
+        <span className={`text-[11px] font-mono-tech px-2 py-0.5 border ${statusBg}`}>
+          {statusText}
+        </span>
+      </div>
+
+      {/* Trajectory Canvas */}
+      <div className="my-auto py-2 hover:bg-slate-50 rounded-none p-2 transition-colors duration-150">
         <svg
           className="w-full h-auto overflow-visible"
           viewBox={`0 0 ${svgWidth} ${svgHeight}`}
         >
-          {/* Y Axis Guide Lines & Labels (250, 140, 100, 70) */}
-          {[250, 140, 100, 70].map((val) => {
+          {/* Green Safe Target Zone Band (70 - 140 mg/dL) */}
+          <rect
+            x={padLeft}
+            y={safeTopY}
+            width={plotWidth}
+            height={safeHeight}
+            fill="#10B981"
+            fillOpacity="0.07"
+          />
+
+          {/* Safe Band Threshold Lines */}
+          <line
+            x1={padLeft}
+            y1={safeTopY}
+            x2={padLeft + plotWidth}
+            y2={safeTopY}
+            stroke="#10B981"
+            strokeWidth="0.8"
+            strokeDasharray="3 3"
+            opacity="0.4"
+          />
+          <line
+            x1={padLeft}
+            y1={safeBottomY}
+            x2={padLeft + plotWidth}
+            y2={safeBottomY}
+            stroke="#10B981"
+            strokeWidth="0.8"
+            strokeDasharray="3 3"
+            opacity="0.4"
+          />
+
+          {/* Y Axis Guide Lines & Labels (250, 180, 140, 100, 70) */}
+          {[250, 180, 140, 100, 70].map((val) => {
             const y = getY(val);
             return (
               <g key={val}>
@@ -76,14 +145,14 @@ export default function ForecastCard({ forecast }: ForecastCardProps) {
                   y1={y}
                   x2={padLeft + plotWidth}
                   y2={y}
-                  stroke="#F8FAFC"
+                  stroke="#F1F5F9"
                   strokeWidth="1"
                 />
                 <text
-                  x={padLeft - 10}
+                  x={padLeft - 8}
                   y={y + 3.5}
                   textAnchor="end"
-                  className="text-[11px] font-sans fill-slate-700 font-medium"
+                  className="text-[10px] font-mono-tech fill-slate-500 font-medium"
                 >
                   {val}
                 </text>
@@ -91,32 +160,160 @@ export default function ForecastCard({ forecast }: ForecastCardProps) {
             );
           })}
 
-          {/* Smooth Projection Curve (Blue) */}
+          {/* 90% Confidence Uncertainty Envelope Ribbon */}
           <path
-            d={`M ${xPast} ${yPast} Q ${xNow} ${yNow}, ${x30} ${y30} T ${x60} ${y60} T ${x120} ${y120}`}
-            fill="none"
-            stroke="#2563EB"
-            strokeWidth="2.2"
+            d={`M ${xNow} ${yNow} 
+                C ${xNow + 25} ${y30_upper}, ${x30 - 20} ${y30_upper}, ${x30} ${y30_upper} 
+                C ${x30 + 25} ${y60_upper}, ${x60 - 20} ${y60_upper}, ${x60} ${y60_upper} 
+                C ${x60 + 25} ${y120_upper}, ${x120 - 20} ${y120_upper}, ${x120} ${y120_upper} 
+                L ${x120} ${y120_lower} 
+                C ${x120 - 20} ${y120_lower}, ${x60 + 25} ${y60_lower}, ${x60} ${y60_lower} 
+                C ${x60 - 20} ${y60_lower}, ${x30 + 25} ${y30_lower}, ${x30} ${y30_lower} 
+                C ${x30 - 20} ${y30_lower}, ${xNow + 25} ${yNow}, ${xNow} ${yNow} Z`}
+            fill="#2563EB"
+            fillOpacity="0.09"
           />
 
-          {/* Projection Horizon Dots (Clean dots, no stacked numbers) */}
-          <circle cx={x30} cy={y30} r="4" fill="#2563EB" />
-          <circle cx={x60} cy={y60} r="4" fill="#2563EB" />
-          <circle cx={x120} cy={y120} r="4" fill="#2563EB" />
+          {/* Historical Solid Line (Past to Now) */}
+          <path
+            d={`M ${xPast} ${yPast} Q ${(xPast + xNow) / 2} ${(yPast + yNow) / 2}, ${xNow} ${yNow}`}
+            fill="none"
+            stroke="#64748B"
+            strokeWidth="2"
+          />
 
-          {/* Bottom X Axis Labels: +30m, +60m, +120m */}
+          {/* Future Trajectory Path (Now through +30m, +60m, +120m) */}
+          <path
+            d={`M ${xNow} ${yNow} C ${xNow + 25} ${yNow}, ${x30 - 25} ${y30}, ${x30} ${y30} C ${x30 + 25} ${y30}, ${x60 - 25} ${y60}, ${x60} ${y60} C ${x60 + 25} ${y60}, ${x120 - 25} ${y120}, ${x120} ${y120}`}
+            fill="none"
+            stroke="#2563EB"
+            strokeWidth="2.4"
+            strokeDasharray="4 2"
+          />
+
+          {/* Now Vertical Anchor Line */}
+          <line
+            x1={xNow}
+            y1={padTop}
+            x2={xNow}
+            y2={padTop + plotHeight}
+            stroke="#94A3B8"
+            strokeWidth="1"
+            strokeDasharray="2 2"
+          />
+
+          {/* Horizon Interactive Dots */}
+          {/* NOW Dot */}
+          <circle
+            cx={xNow}
+            cy={yNow}
+            r="4.5"
+            fill="#0F172A"
+            stroke="#FFFFFF"
+            strokeWidth="1.5"
+            className="cursor-pointer hover:r-6 transition-all"
+            onMouseEnter={() => setHoveredPoint("now")}
+            onMouseLeave={() => setHoveredPoint(null)}
+          />
+          {/* +30m Dot */}
+          <circle
+            cx={x30}
+            cy={y30}
+            r="4.5"
+            fill="#2563EB"
+            stroke="#FFFFFF"
+            strokeWidth="1.5"
+            className="cursor-pointer hover:r-6 transition-all"
+            onMouseEnter={() => setHoveredPoint("30")}
+            onMouseLeave={() => setHoveredPoint(null)}
+          />
+          {/* +60m Dot */}
+          <circle
+            cx={x60}
+            cy={y60}
+            r="4.5"
+            fill="#2563EB"
+            stroke="#FFFFFF"
+            strokeWidth="1.5"
+            className="cursor-pointer hover:r-6 transition-all"
+            onMouseEnter={() => setHoveredPoint("60")}
+            onMouseLeave={() => setHoveredPoint(null)}
+          />
+          {/* +120m Dot */}
+          <circle
+            cx={x120}
+            cy={y120}
+            r="4.5"
+            fill="#2563EB"
+            stroke="#FFFFFF"
+            strokeWidth="1.5"
+            className="cursor-pointer hover:r-6 transition-all"
+            onMouseEnter={() => setHoveredPoint("120")}
+            onMouseLeave={() => setHoveredPoint(null)}
+          />
+
+          {/* Value Labels Above Dots */}
+          <text
+            x={xNow}
+            y={yNow - 9}
+            textAnchor="middle"
+            className="text-[11px] font-mono-tech font-semibold fill-slate-900"
+          >
+            {Math.round(currG)}
+          </text>
+          <text
+            x={x30}
+            y={y30 - 9}
+            textAnchor="middle"
+            className="text-[11px] font-mono-tech font-semibold fill-blue-700"
+          >
+            {Math.round(val30)}
+          </text>
+          <text
+            x={x60}
+            y={y60 - 9}
+            textAnchor="middle"
+            className="text-[11px] font-mono-tech font-semibold fill-blue-700"
+          >
+            {Math.round(val60)}
+          </text>
+          <text
+            x={x120}
+            y={y120 - 9}
+            textAnchor="end"
+            className="text-[11px] font-mono-tech font-semibold fill-blue-700"
+          >
+            {Math.round(val120)}
+          </text>
+
+          {/* Bottom X Axis Labels */}
           <g transform={`translate(0, ${padTop + plotHeight + 18})`}>
-            <text x={x30} textAnchor="middle" className="text-[11px] font-sans fill-slate-700">
+            <text x={xNow} textAnchor="middle" className="text-[11px] font-sans font-medium fill-slate-800">
+              Now
+            </text>
+            <text x={x30} textAnchor="middle" className="text-[11px] font-sans font-medium fill-slate-600">
               +30m
             </text>
-            <text x={x60} textAnchor="middle" className="text-[11px] font-sans fill-slate-700">
+            <text x={x60} textAnchor="middle" className="text-[11px] font-sans font-medium fill-slate-600">
               +60m
             </text>
-            <text x={x120} textAnchor="end" className="text-[11px] font-sans fill-slate-700">
+            <text x={x120} textAnchor="end" className="text-[11px] font-sans font-medium fill-slate-600">
               +120m
             </text>
           </g>
         </svg>
+      </div>
+
+      {/* Bottom Subtitle / Legend */}
+      <div className="flex items-center justify-between text-[11px] font-sans text-slate-500 border-t border-slate-100 pt-2">
+        <span className="flex items-center gap-1.5">
+          <span className="w-2.5 h-2.5 bg-emerald-500/20 border border-emerald-500 inline-block" />
+          Target Zone (70–140 mg/dL)
+        </span>
+        <span className="flex items-center gap-1.5 font-mono-tech">
+          <span className="w-3 h-0.5 bg-blue-600 inline-block" />
+          90% CI Ensemble
+        </span>
       </div>
     </div>
   );
