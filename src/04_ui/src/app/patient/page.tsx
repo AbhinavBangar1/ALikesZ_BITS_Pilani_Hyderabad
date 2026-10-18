@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
+import DashboardTutorial, { TutorialStep } from "@/components/common/DashboardTutorial";
 
 interface WhatIfResponse {
   patient_id: string;
@@ -28,6 +29,49 @@ interface PatientSummary {
   clinical_risk_tier: string;
 }
 
+const PATIENT_TUTORIAL_STEPS: TutorialStep[] = [
+  {
+    targetId: "tutorial-patient-cgm",
+    title: "1. Real-Time Glucose & Trend",
+    badge: "LIVE SENSOR",
+    description:
+      "Displays your active continuous glucose reading in mg/dL, directional trend velocity (e.g., STABLE, RISING), and recent 3-hour trajectory sparkline color-coded by clinical target zones (70–140 mg/dL).",
+    tip: "A blue bar indicates in-range; amber indicates hyperglycemia (>180); red indicates hypoglycemia danger (<70).",
+  },
+  {
+    targetId: "tutorial-patient-forecast",
+    title: "2. Predictive Forecast Horizons",
+    badge: "AI HORIZON",
+    description:
+      "Proactively projects where your blood sugar will be in +30 minutes and +60 minutes using physiological twin kinetics, giving you actionable foresight before symptoms or extreme excursions occur.",
+    tip: "If the 60m projection exceeds 140 mg/dL, the twin flags an upcoming excursion risk.",
+  },
+  {
+    targetId: "tutorial-patient-simulator",
+    title: "3. Counterfactual 'What-If' Sliders",
+    badge: "TWIN SIMULATION",
+    description:
+      "Simulate real-life choices before you make them: adjust Food Carbs (0–120g), Rapid Insulin Bolus (0–10U), and Post-Meal Walking (0–60 min). For Type 2 patients, test the impact of taking or missing oral medications.",
+    tip: "Notice how a 15-minute post-meal walk stimulates GLUT-4 muscle uptake and flattens glycemic spikes.",
+  },
+  {
+    targetId: "tutorial-patient-chart",
+    title: "4. 2-Hour Dual-Trajectory Canvas",
+    badge: "PHYSIOLOGICAL TWIN",
+    description:
+      "Directly compares your Baseline trajectory (dashed gray line: if you make no changes) against your Simulated trajectory (solid blue line: incorporating your food, insulin, or exercise), forecasting your peak glucose level.",
+    tip: "The green background band highlights the 70–140 mg/dL safe clinical zone.",
+  },
+  {
+    targetId: "tutorial-patient-diet",
+    title: "5. Indian Meal Calculator",
+    badge: "NUTRITION PLANNER",
+    description:
+      "Easily plan authentic South Asian meals (Roti, Dal, Paneer, Rice, Dosa, Idli, Poha). Computes total carbs, protein, and fat, and provides one-click 'Apply to What-If' simulation to sync directly with your metabolic twin.",
+    tip: "Click '+ Roti' or '+ Dal' to watch your simulated postprandial curve update in real-time.",
+  },
+];
+
 export default function PatientDashboard() {
   const [patientId, setPatientId] = useState<string>("T1D-IN-001");
   const [patientList, setPatientList] = useState<PatientSummary[]>([]);
@@ -40,6 +84,19 @@ export default function PatientDashboard() {
   const [forecast60, setForecast60] = useState<number>(124);
   const [forecast120, setForecast120] = useState<number>(115);
   const [sparklineData, setSparklineData] = useState<number[]>([]);
+  const [lastRecordedMeal, setLastRecordedMeal] = useState<{ carbs: number; bolus: number; time: string } | null>(null);
+  const [tutorialOpen, setTutorialOpen] = useState<boolean>(false);
+
+  // Auto-open tutorial on first visit
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const seen = localStorage.getItem("kiko_patient_tutorial_seen");
+      if (!seen) {
+        const timer = setTimeout(() => setTutorialOpen(true), 1200);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, []);
 
   // Simulation Sliders
   const [carbs, setCarbs] = useState<number>(45);
@@ -129,6 +186,24 @@ export default function PatientDashboard() {
           const streamData = await streamRes.json();
           const pts = (streamData.data || []).map((pt: any) => pt.glucose);
           setSparklineData(pts);
+
+          // Detect recent meal ingestion events in stream
+          const mealList = (streamData.data || []).filter(
+            (d: any) => (d.carb_input || 0) > 0 || (d.bolus_volume_delivered || 0) > 0
+          );
+          if (mealList.length > 0) {
+            const lm = mealList[mealList.length - 1];
+            const time = lm.timestamp?.includes(" ")
+              ? lm.timestamp.split(" ")[1].slice(0, 5)
+              : lm.timestamp?.slice(0, 5) || "";
+            setLastRecordedMeal({
+              carbs: Math.round(lm.carb_input || 0),
+              bolus: Number((lm.bolus_volume_delivered || 0).toFixed(1)),
+              time,
+            });
+          } else {
+            setLastRecordedMeal(null);
+          }
         }
 
         if (forecastRes.ok) {
@@ -218,16 +293,17 @@ export default function PatientDashboard() {
   const plotW = chartW - pLeft - pRight;
   const plotH = chartH - pTop - pBottom;
 
-  const minY = 60;
-  const maxY = 260;
+  const baseCurve = whatIf?.baseline_trajectory || [currentGlucose, forecast30, forecast60, forecast120];
+  const simCurve = whatIf?.simulated_trajectory || [currentGlucose, forecast30 + 10, forecast60 + 20, forecast120 + 5];
+
+  const highestSim = Math.max(...baseCurve, ...simCurve, 240);
+  const minY = 40;
+  const maxY = highestSim > 330 ? Math.ceil((highestSim + 20) / 50) * 50 : 350;
 
   const getY = (val: number) => {
     const clamped = Math.max(minY, Math.min(maxY, val));
     return pTop + plotH - ((clamped - minY) / (maxY - minY)) * plotH;
   };
-
-  const baseCurve = whatIf?.baseline_trajectory || [currentGlucose, forecast30, forecast60, forecast120];
-  const simCurve = whatIf?.simulated_trajectory || [currentGlucose, forecast30 + 10, forecast60 + 20, forecast120 + 5];
 
   const xPts = [pLeft, pLeft + plotW * 0.33, pLeft + plotW * 0.66, pLeft + plotW];
   const baseYPts = baseCurve.map(getY);
@@ -277,8 +353,19 @@ export default function PatientDashboard() {
           </span>
         </div>
 
-        {/* Right: Clinician Portal Link & Status */}
-        <div className="flex items-center gap-4">
+        {/* Right: Tour Button, Clinician Portal Link & Status */}
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setTutorialOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono-tech text-slate-700 hover:text-slate-900 border border-slate-300 hover:border-slate-900 bg-white hover:bg-slate-50 transition-colors rounded-none cursor-pointer"
+            title="Take a 5-step guided tour of the Patient Dashboard"
+          >
+            <span className="w-3.5 h-3.5 rounded-full border border-slate-400 text-[10px] flex items-center justify-center font-bold">
+              ?
+            </span>
+            <span>Tour (5 Steps)</span>
+          </button>
           <div className="flex items-center gap-2 text-xs font-mono-tech text-slate-600">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
             <span>SYNCED 15s</span>
@@ -297,57 +384,78 @@ export default function PatientDashboard() {
         {/* ── Column 1: Live Status & Explainability Feed (25% width) ── */}
         <section className="w-full lg:w-[25%] p-6 flex flex-col justify-between bg-white">
           <div>
-            <div className="flex items-baseline justify-between">
-              <span className="text-[12px] font-mono-tech uppercase tracking-wider text-slate-500">
-                CURRENT CGM
-              </span>
-              <span className="text-xs font-mono-tech text-slate-400">{cgmTime}</span>
-            </div>
-
-            {/* Glucose Hero Value */}
-            <div className="mt-2 flex items-baseline gap-2">
-              <span className="text-[52px] font-semibold text-slate-900 leading-none tracking-tight font-sans">
-                {currentGlucose}
-              </span>
-              <span className="text-base font-semibold text-slate-900 font-sans">
-                mg/dL
-              </span>
-              <span className="ml-auto text-xs font-mono-tech px-2 py-0.5 border border-slate-300 text-slate-800 bg-slate-50">
-                {trend.replace("_", " ")}
-              </span>
-            </div>
-
-            {/* 3-Hour Sparkline Box */}
-            <div className="mt-4 border border-slate-200 p-3 bg-slate-50/50">
-              <div className="flex items-center justify-between text-[11px] font-mono-tech text-slate-500 mb-2">
-                <span>Recent 3-Hour Trajectory</span>
-                <span>Target: 70–140</span>
+            <div id="tutorial-patient-cgm" className="border border-slate-200 p-4 bg-white mb-2">
+              <div className="flex items-baseline justify-between">
+                <span className="text-[12px] font-mono-tech uppercase tracking-wider text-slate-500">
+                  CURRENT CGM
+                </span>
+                <span className="text-xs font-mono-tech text-slate-400">{cgmTime}</span>
               </div>
-              <div className="h-14 flex items-end gap-1">
-                {sparklineData.slice(-24).map((val, idx) => {
-                  const h = Math.max(10, Math.min(52, ((val - 60) / 180) * 52));
-                  const isHigh = val > 180;
-                  const isLow = val < 70;
-                  return (
-                    <div
-                      key={idx}
-                      className={`flex-1 transition-all ${
-                        isLow
-                          ? "bg-rose-500"
-                          : isHigh
-                          ? "bg-amber-500"
-                          : "bg-blue-600"
-                      }`}
-                      style={{ height: `${h}px` }}
-                      title={`${val} mg/dL`}
-                    />
-                  );
-                })}
+
+              {/* Glucose Hero Value */}
+              <div className="mt-2 flex items-baseline gap-2">
+                <span className="text-[52px] font-semibold text-slate-900 leading-none tracking-tight font-sans">
+                  {currentGlucose}
+                </span>
+                <span className="text-base font-semibold text-slate-900 font-sans">
+                  mg/dL
+                </span>
+                <span className="ml-auto text-xs font-mono-tech px-2 py-0.5 border border-slate-300 text-slate-800 bg-slate-50">
+                  {trend.replace("_", " ")}
+                </span>
               </div>
+
+              {/* 3-Hour Sparkline Box */}
+              <div className="mt-4 border border-slate-200 p-3 bg-slate-50/50">
+                <div className="flex items-center justify-between text-[11px] font-mono-tech text-slate-500 mb-2">
+                  <span>Recent 3-Hour Trajectory</span>
+                  <span>Target: 70–140</span>
+                </div>
+                <div className="h-14 flex items-end gap-1">
+                  {sparklineData.slice(-24).map((val, idx) => {
+                    const h = Math.max(10, Math.min(52, ((val - 60) / 180) * 52));
+                    const isHigh = val > 180;
+                    const isLow = val < 70;
+                    return (
+                      <div
+                        key={idx}
+                        className={`flex-1 transition-all ${
+                          isLow
+                            ? "bg-rose-500"
+                            : isHigh
+                            ? "bg-amber-500"
+                            : "bg-blue-600"
+                        }`}
+                        style={{ height: `${h}px` }}
+                        title={`${val} mg/dL`}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Meal Ingestion Banner if recent meal exists in stream */}
+              {lastRecordedMeal && (
+                <div className="mt-3 p-2.5 border border-amber-300 bg-amber-50/80 flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-1.5 font-medium text-amber-900">
+                    <span>🍽 Last Ingestion:</span>
+                    <span className="font-bold">{lastRecordedMeal.carbs}g carbs</span>
+                    {lastRecordedMeal.bolus > 0 && (
+                      <span className="text-blue-700">· {lastRecordedMeal.bolus}U</span>
+                    )}
+                  </div>
+                  <span className="font-mono-tech text-[10px] text-amber-800 font-semibold">
+                    @{lastRecordedMeal.time}
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* Predictive Horizons Grid */}
-            <div className="mt-4 grid grid-cols-2 gap-0 border border-slate-200 divide-x divide-slate-200">
+            <div
+              id="tutorial-patient-forecast"
+              className="mt-4 grid grid-cols-2 gap-0 border border-slate-200 divide-x divide-slate-200"
+            >
               <div className="p-3 text-center">
                 <span className="text-[11px] font-mono-tech text-slate-500 block uppercase">
                   In +30 min
@@ -443,7 +551,10 @@ export default function PatientDashboard() {
             </div>
 
             {/* Interactive Sliders Deck */}
-            <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div
+              id="tutorial-patient-simulator"
+              className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3"
+            >
               {/* Slider 1: Food Carbs */}
               <div className="p-3 border border-slate-200 bg-white">
                 <div className="flex justify-between text-xs font-medium text-slate-800">
@@ -533,7 +644,10 @@ export default function PatientDashboard() {
             </div>
 
             {/* Dual-Curve Trajectory Simulation Canvas */}
-            <div className="mt-4 border border-slate-200 p-3 bg-white">
+            <div
+              id="tutorial-patient-chart"
+              className="mt-4 border border-slate-200 p-3 bg-white"
+            >
               <div className="flex items-center justify-between text-xs mb-2">
                 <span className="font-medium text-slate-900">
                   Dual-Trajectory 2-Hour Physiological Projection
@@ -562,7 +676,7 @@ export default function PatientDashboard() {
                 />
 
                 {/* Y Axis Guide Lines */}
-                {[240, 180, 140, 100, 70].map((val) => {
+                {(maxY > 350 ? [maxY, 300, 250, 180, 140, 70] : [300, 250, 180, 140, 70]).map((val) => {
                   const y = getY(val);
                   return (
                     <g key={val}>
@@ -646,7 +760,10 @@ export default function PatientDashboard() {
         </section>
 
         {/* ── Column 3: Indian Nutrition & Meal Calculator (27% width) ── */}
-        <section className="w-full lg:w-[27%] p-6 flex flex-col justify-between bg-white">
+        <section
+          id="tutorial-patient-diet"
+          className="w-full lg:w-[27%] p-6 flex flex-col justify-between bg-white"
+        >
           <div>
             <div className="border-b border-slate-200 pb-3">
               <h2 className="font-editorial text-xl font-normal text-slate-900 tracking-tight">
@@ -732,6 +849,15 @@ export default function PatientDashboard() {
           </div>
         </section>
       </main>
+
+      {/* ── Interactive 5-Step Guided Patient Dashboard Tour ── */}
+      <DashboardTutorial
+        steps={PATIENT_TUTORIAL_STEPS}
+        isOpen={tutorialOpen}
+        onClose={() => setTutorialOpen(false)}
+        tutorialTitle="Patient Companion Tour"
+        storageKey="kiko_patient_tutorial_seen"
+      />
     </div>
   );
 }

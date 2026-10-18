@@ -489,24 +489,23 @@ class CohortLiveStreamManager:
             self.simulators[pid] = sim
 
     def get_patient_live_hr(self, patient_id: str, seconds: int = 60) -> List[dict]:
-        """Returns the continuous 1-second pulse stream for live telemetry view."""
+        """Returns the continuous 1-second pulse stream for live telemetry view, advancing 1s."""
         if patient_id not in self.simulators:
             raise KeyError(f"Patient {patient_id} not found in simulator cohort.")
         sim = self.simulators[patient_id]
+        
+        # Advance 1-second cardiorespiratory state so every 1s request has fresh organic pulse
+        now = datetime.now()
+        sim._step_1second(now)
+
         buf = list(sim.hr_1s_buffer)
-        if len(buf) == 0:
-            now = datetime.now()
-            res = []
-            for s in range(seconds, 0, -1):
-                ts = (now - timedelta(seconds=s)).strftime("%Y-%m-%d %H:%M:%S")
-                res.append({
-                    "timestamp": ts,
-                    "heart_rate": int(round(sim.current_hr)),
-                    "rr_ms": round(60000.0 / max(40, sim.current_hr), 1),
-                    "activity_state": sim.activity_state,
-                    "steps": 0
-                })
-            return res
+        if len(buf) < seconds:
+            # Seed buffer up to requested seconds if fresh
+            needed = seconds - len(buf)
+            for s in range(needed, 0, -1):
+                past_t = now - timedelta(seconds=s)
+                sim._step_1second(past_t)
+            buf = list(sim.hr_1s_buffer)
         return buf[-seconds:]
 
     def tick_patient(self, patient_id: str, carbs_g: float = 0.0, bolus_u: float = 0.0, walk_min: float = 0.0) -> dict:

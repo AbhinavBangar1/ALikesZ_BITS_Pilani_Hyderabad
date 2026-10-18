@@ -29,16 +29,18 @@ interface PatientProfileCardProps {
   ehr: PatientEHR | null;
   currentGlucose?: number;
   stream: TelemetryRecord[];
+  liveBpm?: number;
 }
 
 export default function PatientProfileCard({
   ehr,
   currentGlucose,
   stream,
+  liveBpm,
 }: PatientProfileCardProps) {
   const latestTelemetry = stream && stream.length > 0 ? stream[stream.length - 1] : null;
   const cgmVal = Math.round(currentGlucose || latestTelemetry?.glucose || 140);
-  const hrVal = Math.round(latestTelemetry?.heart_rate || 72);
+  const hrVal = Math.round(liveBpm || latestTelemetry?.heart_rate || 72);
   const stepsVal =
     stream && stream.length > 0
       ? stream.slice(-24).reduce((sum, pt) => sum + (pt.steps || 0), 0).toLocaleString()

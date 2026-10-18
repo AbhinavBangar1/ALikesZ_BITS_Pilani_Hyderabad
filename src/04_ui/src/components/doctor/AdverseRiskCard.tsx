@@ -92,10 +92,6 @@ export default function AdverseRiskCard({
           </div>
         </div>
 
-        {/* Model 2 NIH DCLP3 Validation Tag */}
-        <div className="text-center text-[10px] font-mono-tech text-slate-400 mt-0.5">
-          Model 2 Classifier · AUROC 0.944 (NIH DCLP3 Validated)
-        </div>
       </div>
 
       {/* 3 Clinical Breakdown Rows: Edge-to-Edge Full Width, Squared Corners, Invisible Divider Lines */}

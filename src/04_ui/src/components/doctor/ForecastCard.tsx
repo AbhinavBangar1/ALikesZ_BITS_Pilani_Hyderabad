@@ -34,20 +34,22 @@ export default function ForecastCard({ forecast, stream }: ForecastCardProps) {
   const plotWidth = svgWidth - padLeft - padRight;
   const plotHeight = svgHeight - padTop - padBottom;
 
-  const minY = 60;
-  const maxY = 260;
-
-  const getY = (val: number) => {
-    const clamped = Math.max(minY, Math.min(maxY, val));
-    return padTop + plotHeight - ((clamped - minY) / (maxY - minY)) * plotHeight;
-  };
-
   // Trajectory Anchor Points
   const currG = forecast?.current_glucose || (stream.length > 0 ? stream[stream.length - 1].glucose : 160);
   const pastG = stream.length >= 6 ? stream[stream.length - 6].glucose : currG - 10;
   const val30 = forecast?.forecast?.t_plus_30min ?? (currG + 15);
   const val60 = forecast?.forecast?.t_plus_60min ?? (currG + 8);
   const val120 = forecast?.forecast?.t_plus_120min ?? (currG - 12);
+
+  // Hardcoded Clinical CGM Range (40 - 350 mg/dL, with dynamic ceiling if extreme excursion)
+  const highestG = Math.max(currG, pastG, val30, val60, val120);
+  const minY = 40;
+  const maxY = highestG > 330 ? Math.ceil((highestG + 20) / 50) * 50 : 350;
+
+  const getY = (val: number) => {
+    const clamped = Math.max(minY, Math.min(maxY, val));
+    return padTop + plotHeight - ((clamped - minY) / (maxY - minY)) * plotHeight;
+  };
 
   const yPast = getY(pastG);
   const yNow = getY(currG);
@@ -135,8 +137,8 @@ export default function ForecastCard({ forecast, stream }: ForecastCardProps) {
             opacity="0.4"
           />
 
-          {/* Y Axis Guide Lines & Labels (250, 180, 140, 100, 70) */}
-          {[250, 180, 140, 100, 70].map((val) => {
+          {/* Y Axis Guide Lines & Labels (300, 250, 180, 140, 70) */}
+          {(maxY > 350 ? [maxY, 300, 250, 180, 140, 70] : [300, 250, 180, 140, 70]).map((val) => {
             const y = getY(val);
             return (
               <g key={val}>
@@ -304,17 +306,6 @@ export default function ForecastCard({ forecast, stream }: ForecastCardProps) {
         </svg>
       </div>
 
-      {/* Bottom Subtitle / Legend */}
-      <div className="flex items-center justify-between text-[11px] font-sans text-slate-500 border-t border-slate-100 pt-2">
-        <span className="flex items-center gap-1.5">
-          <span className="w-2.5 h-2.5 bg-emerald-500/20 border border-emerald-500 inline-block" />
-          Target Zone (70–140 mg/dL)
-        </span>
-        <span className="flex items-center gap-1.5 font-mono-tech">
-          <span className="w-3 h-0.5 bg-blue-600 inline-block" />
-          90% CI Ensemble
-        </span>
-      </div>
     </div>
   );
 }

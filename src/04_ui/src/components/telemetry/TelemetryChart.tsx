@@ -9,11 +9,24 @@ export interface TelemetryRecord {
   steps: number;
   insulin_units?: number;
   carbs_grams?: number;
+  carb_input?: number;
+  bolus_volume_delivered?: number;
+}
+
+export interface LiveHrPoint {
+  timestamp: string;
+  heart_rate: number;
+  rr_ms?: number;
+  activity_state?: string;
+  steps?: number;
 }
 
 interface TelemetryChartProps {
   stream: TelemetryRecord[];
+  liveHrHistory?: LiveHrPoint[];
   currentGlucose?: number;
+  liveBpm?: number;
+  liveRr?: number;
 }
 
 // Convert points to Catmull-Rom cubic bezier SVG path
@@ -50,7 +63,7 @@ function formatTimestamp(ts: string | undefined): string {
   return ts.slice(0, 8);
 }
 
-export default function TelemetryChart({ stream }: TelemetryChartProps) {
+export default function TelemetryChart({ stream, liveHrHistory, currentGlucose, liveBpm }: TelemetryChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Dynamic window points for 15-second telemetry (default 40 points = 10 minutes)
@@ -85,69 +98,69 @@ export default function TelemetryChart({ stream }: TelemetryChartProps) {
     return totalStream.slice(-windowPoints);
   }, [totalStream, windowPoints]);
 
-  // Chart layout dimensions
+  // Overall Chart Layout (exact same parent dimensions: 600 x 220)
   const svgWidth = 600;
   const svgHeight = 220;
-  const padLeft = 45;
-  const padRight = 30;
-  const padTop = 25;
-  const padBottom = 35;
+  const padLeft = 46;
+  const padRight = 24;
   const plotWidth = svgWidth - padLeft - padRight;
-  const plotHeight = svgHeight - padTop - padBottom;
 
-  // ── DYNAMIC Y-AXIS SCALE ──────────────────────────────────────────────────
-  const { minY, maxY, yTicks } = useMemo(() => {
-    if (visibleData.length === 0) {
-      return { minY: 60, maxY: 260, yTicks: [250, 180, 140, 100, 70] };
-    }
+  // ── DUAL PLOT VERTICAL PARTITIONS ─────────────────────────────────────────
+  // Upper Piece: CGM Glucose (Y: 14 to 110, height = 96px)
+  const cgmTop = 14;
+  const cgmHeight = 96;
+  const cgmBottom = cgmTop + cgmHeight;
 
-    const glucoseVals = visibleData
-      .map((d) => d.glucose)
-      .filter((g) => g && !isNaN(g));
+  // Lower Piece: Heart Rate (Y: 126 to 190, height = 64px)
+  const hrTop = 126;
+  const hrHeight = 64;
+  const hrBottom = hrTop + hrHeight;
 
-    const rawMin = glucoseVals.length > 0 ? Math.min(...glucoseVals) : 70;
-    const rawMax = glucoseVals.length > 0 ? Math.max(...glucoseVals) : 180;
-
-    // Comfortably bracket the actual live telemetry and the target safe zone (70 - 140)
-    const paddedMin = Math.min(rawMin - 15, 60);
-    const paddedMax = Math.max(rawMax + 20, 160);
-
-    const calcMin = Math.max(30, Math.floor(paddedMin / 20) * 20);
-    const calcMax = Math.min(400, Math.ceil(paddedMax / 20) * 20);
-
-    // Pick 4-5 clean tick increments
-    const span = calcMax - calcMin;
-    const step = span > 180 ? 50 : span > 100 ? 40 : 25;
-    const ticks: number[] = [];
-    for (let v = calcMax; v >= calcMin; v -= step) {
-      ticks.push(v);
-    }
-    if (!ticks.includes(70) && calcMin <= 70 && calcMax >= 70) ticks.push(70);
-    if (!ticks.includes(140) && calcMin <= 140 && calcMax >= 140) ticks.push(140);
-
-    const uniqueTicks = Array.from(new Set(ticks)).sort((a, b) => b - a);
-    return { minY: calcMin, maxY: calcMax, yTicks: uniqueTicks };
+  // ── 1. UPPER PIECE: CGM HARDCODED CLINICAL SCALE (40 - 350 mg/dL) ─────────
+  const { minCGM, maxCGM, cgmTicks } = useMemo(() => {
+    const gVals = visibleData.map((d) => d.glucose).filter((g) => g && !isNaN(g));
+    const rawMax = gVals.length > 0 ? Math.max(...gVals) : 180;
+    const calcMin = 40;
+    const calcMax = rawMax > 330 ? Math.ceil((rawMax + 20) / 50) * 50 : 350;
+    const ticks = calcMax > 350 ? [calcMax, 300, 250, 180, 140, 70] : [300, 250, 180, 140, 70];
+    return { minCGM: calcMin, maxCGM: calcMax, cgmTicks: ticks };
   }, [visibleData]);
 
-  const getY = (val: number) => {
-    const clamped = Math.max(minY, Math.min(maxY, val));
-    return padTop + plotHeight - ((clamped - minY) / (maxY - minY)) * plotHeight;
+  const getY_CGM = (val: number) => {
+    const clamped = Math.max(minCGM, Math.min(maxCGM, val));
+    return cgmTop + cgmHeight - ((clamped - minCGM) / (maxCGM - minCGM)) * cgmHeight;
   };
 
-  // Target safe zone band: 70 to 140 mg/dL dynamically mapped to current Y scale
-  const targetTopY = getY(140);
-  const targetBottomY = getY(70);
-  const targetHeight = targetBottomY - targetTopY;
+  // CGM Target safe zone band (70 to 140 mg/dL)
+  const cgmTargetTop = getY_CGM(140);
+  const cgmTargetBottom = getY_CGM(70);
+  const cgmTargetHeight = Math.max(4, cgmTargetBottom - cgmTargetTop);
 
-  // ── DYNAMIC X-AXIS SCALE ──────────────────────────────────────────────────
+  // ── 2. LOWER PIECE: HEART RATE HARDCODED CLINICAL SCALE (40 - 140 BPM) ───
+  const { minHR, maxHR, hrTicks } = useMemo(() => {
+    const hrData = liveHrHistory && liveHrHistory.length > 0 ? liveHrHistory : visibleData;
+    const hrVals = hrData.map((d) => d.heart_rate).filter((h) => h && !isNaN(h));
+    const rawMax = hrVals.length > 0 ? Math.max(...hrVals) : 100;
+    const calcMin = 40;
+    const calcMax = rawMax > 135 ? Math.ceil((rawMax + 10) / 10) * 10 : 140;
+    const ticks = calcMax > 140 ? [calcMax, 100, 60] : [140, 100, 60];
+    return { minHR: calcMin, maxHR: calcMax, hrTicks: ticks };
+  }, [liveHrHistory, visibleData]);
+
+  const getY_HR = (val: number) => {
+    const clamped = Math.max(minHR, Math.min(maxHR, val));
+    return hrTop + hrHeight - ((clamped - minHR) / (maxHR - minHR)) * hrHeight;
+  };
+
+  // ── 3. SHARED TIMELINE X-AXIS SCALE ──────────────────────────────────────
   const xTicks = useMemo(() => {
     if (visibleData.length === 0) {
       return [
-        { label: "1:00", pct: 0, anchor: "start" },
-        { label: "9:00", pct: 0.25, anchor: "middle" },
-        { label: "12:00", pct: 0.5, anchor: "middle" },
-        { label: "15:00", pct: 0.75, anchor: "middle" },
-        { label: "20:00", pct: 1.0, anchor: "end" },
+        { label: "00:00:00", pct: 0, anchor: "start" },
+        { label: "00:02:30", pct: 0.25, anchor: "middle" },
+        { label: "00:05:00", pct: 0.5, anchor: "middle" },
+        { label: "00:07:30", pct: 0.75, anchor: "middle" },
+        { label: "00:10:00", pct: 1.0, anchor: "end" },
       ];
     }
 
@@ -164,45 +177,93 @@ export default function TelemetryChart({ stream }: TelemetryChartProps) {
       const pct = idx / Math.max(1, n - 1);
       const timeStr = formatTimestamp(visibleData[idx]?.timestamp);
       return {
-        label: i === 4 ? `${timeStr}` : timeStr,
+        label: timeStr,
         pct,
         anchor: i === 0 ? "start" : i === 4 ? "end" : "middle",
       };
     });
   }, [visibleData]);
 
-  // Calculate coordinates for visible points
+  // Points mapped into upper (CGM) coordinate space
   const points = useMemo(() => {
-    if (visibleData.length === 0) {
-      return [
-        { x: padLeft, yG: getY(88), yHR: getY(80), steps: 0 },
-        { x: padLeft + plotWidth * 0.15, yG: getY(84), yHR: getY(78), steps: 40 },
-        { x: padLeft + plotWidth * 0.3, yG: getY(105), yHR: getY(82), steps: 120 },
-        { x: padLeft + plotWidth * 0.45, yG: getY(98), yHR: getY(84), steps: 90 },
-        { x: padLeft + plotWidth * 0.58, yG: getY(225), yHR: getY(118), steps: 250 },
-        { x: padLeft + plotWidth * 0.72, yG: getY(170), yHR: getY(122), steps: 80 },
-        { x: padLeft + plotWidth * 0.85, yG: getY(95), yHR: getY(92), steps: 30 },
-        { x: padLeft + plotWidth, yG: getY(102), yHR: getY(88), steps: 10 },
-      ];
-    }
-
+    if (visibleData.length === 0) return [];
     return visibleData.map((d, i) => {
       const x = padLeft + (i / Math.max(1, visibleData.length - 1)) * plotWidth;
-      const yG = getY(d.glucose);
-      const yHR = getY(d.heart_rate);
-      return { x, yG, yHR, steps: d.steps || 0 };
+      const yG = getY_CGM(d.glucose);
+      const yHR = getY_HR(d.heart_rate);
+      const carbs = Number(d.carb_input || d.carbs_grams || 0);
+      const bolus = Number(d.bolus_volume_delivered || d.insulin_units || 0);
+      return {
+        x,
+        yG,
+        yHR,
+        steps: d.steps || 0,
+        carbs,
+        bolus,
+        glucose: d.glucose,
+        heart_rate: d.heart_rate,
+        timestamp: d.timestamp,
+      };
     });
-  }, [visibleData, plotWidth, padLeft, minY, maxY]);
+  }, [visibleData, plotWidth, padLeft, minCGM, maxCGM, minHR, maxHR]);
+
+  // Detected meal events within the visible telemetry window
+  const mealPoints = useMemo(() => {
+    return points.filter((p) => p.carbs > 0 || p.bolus > 0);
+  }, [points]);
+
+  // Most recent meal ingestion event
+  const recentMeal = useMemo(() => {
+    for (let i = points.length - 1; i >= 0; i--) {
+      if (points[i].carbs > 0) return points[i];
+    }
+    return null;
+  }, [points]);
 
   const cgmPath = useMemo(() => {
     return pointsToCubicBezierPath(points.map((p) => ({ x: p.x, y: p.yG })));
   }, [points]);
 
-  const hrPath = useMemo(() => {
-    return pointsToCubicBezierPath(points.map((p) => ({ x: p.x, y: p.yHR })));
-  }, [points]);
+  // Points mapped into lower (HR) coordinate space: supports 1-second live buffer!
+  const hrPoints = useMemo(() => {
+    if (liveHrHistory && liveHrHistory.length > 0) {
+      const n = liveHrHistory.length;
+      return liveHrHistory.map((d, i) => {
+        const x = padLeft + (i / Math.max(1, n - 1)) * plotWidth;
+        const yHR = getY_HR(d.heart_rate);
+        return { x, yHR, heart_rate: d.heart_rate, timestamp: d.timestamp, rr_ms: d.rr_ms };
+      });
+    }
+    return points.map((p, i) => ({
+      x: p.x,
+      yHR: p.yHR,
+      heart_rate: visibleData[i]?.heart_rate || 72,
+      timestamp: visibleData[i]?.timestamp,
+    }));
+  }, [liveHrHistory, points, visibleData, plotWidth, padLeft, minHR, maxHR]);
 
-  // Hovered data point
+  const hrPath = useMemo(() => {
+    return pointsToCubicBezierPath(hrPoints.map((p) => ({ x: p.x, y: p.yHR })));
+  }, [hrPoints]);
+
+  // ── 4. CLINICAL STEPS & ACTIVITY REPRESENTATION (WINDOW-BASED) ────────────
+  const { totalWindowSteps, activeBoutState, avgCadenceSpm } = useMemo(() => {
+    if (visibleData.length === 0) {
+      return { totalWindowSteps: 0, activeBoutState: "Sedentary", avgCadenceSpm: 0 };
+    }
+    const totalSteps = visibleData.reduce((acc, d) => acc + (d.steps || 0), 0);
+    // Window duration in minutes (each tick = 15s = 0.25 min)
+    const windowMinutes = Math.max(1, (visibleData.length * 15) / 60);
+    const cadence = Math.round(totalSteps / windowMinutes);
+
+    let state = "Sedentary";
+    if (cadence > 95) state = "Exercise";
+    else if (cadence > 25) state = "Ambulatory Walk";
+
+    return { totalWindowSteps: totalSteps, activeBoutState: state, avgCadenceSpm: cadence };
+  }, [visibleData]);
+
+  // Hovered item
   const hoveredData = useMemo(() => {
     if (hoverIdx === null || hoverIdx < 0 || hoverIdx >= visibleData.length) return null;
     return visibleData[hoverIdx];
@@ -212,6 +273,16 @@ export default function TelemetryChart({ stream }: TelemetryChartProps) {
     if (hoverIdx === null || hoverIdx < 0 || hoverIdx >= points.length) return null;
     return points[hoverIdx];
   }, [hoverIdx, points]);
+
+  const hoveredHrPoint = useMemo(() => {
+    if (hoverIdx === null || hoverIdx < 0) return null;
+    if (liveHrHistory && liveHrHistory.length > 0) {
+      const frac = hoverIdx / Math.max(1, visibleData.length - 1);
+      const hrIdx = Math.min(liveHrHistory.length - 1, Math.max(0, Math.round(frac * (liveHrHistory.length - 1))));
+      return hrPoints[hrIdx];
+    }
+    return hrPoints[hoverIdx] || null;
+  }, [hoverIdx, liveHrHistory, visibleData.length, hrPoints]);
 
   const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
     const svg = e.currentTarget;
@@ -240,53 +311,78 @@ export default function TelemetryChart({ stream }: TelemetryChartProps) {
     setHoverIdx(null);
   };
 
+  // Latest readings for display
+  const latestHrPoint = liveHrHistory && liveHrHistory.length > 0 ? liveHrHistory[liveHrHistory.length - 1] : null;
+  const latestGlucose = hoveredData
+    ? hoveredData.glucose
+    : visibleData.length > 0
+    ? visibleData[visibleData.length - 1].glucose
+    : currentGlucose || 140;
+
+  const currentDisplayHr = hoveredData
+    ? hoveredData.heart_rate
+    : liveBpm || latestHrPoint?.heart_rate || (visibleData.length > 0 ? visibleData[visibleData.length - 1].heart_rate : 72);
+
   return (
     <div
       ref={containerRef}
-      className="w-full h-full p-6 bg-white hover:bg-slate-50/40 transition-colors duration-200 flex flex-col justify-between select-none cursor-pointer rounded-none"
+      className="w-full h-full p-5 bg-white hover:bg-slate-50/30 transition-colors duration-200 flex flex-col justify-between select-none cursor-pointer rounded-none"
     >
-      {/* Card Header: Title + Live Readout */}
-      <div className="flex items-center justify-between pb-2 mb-1 border-b border-slate-100">
-        <div className="flex items-center gap-2">
-          <h2 className="font-editorial text-xl font-normal text-slate-900 tracking-tight">
-            Synchronized Multi-Modal Telemetry
-          </h2>
-          <span className="text-[10px] font-mono-tech px-2 py-0.5 border border-slate-300 text-slate-600 bg-slate-50 uppercase">
-            15s High-Frequency
+      {/* ── CARD HEADER: CLEAN READOUT STRIP (NO HEADERS, NO GRAPH SYMBOLS) ── */}
+      <div className="flex items-center justify-between pb-2 mb-1 border-b border-slate-100 text-xs">
+        <div className="flex items-center space-x-5 font-semibold flex-wrap gap-y-1">
+          <span className="text-[#2563EB] font-sans">
+            CGM: {latestGlucose} mg/dL
           </span>
-        </div>
-        <div className="flex items-center space-x-3 text-xs font-semibold pr-1">
-          <span className="text-[#2563EB] font-sans flex items-center gap-1">
-            <span className="w-2.5 h-2.5 bg-blue-600 inline-block" />
-            CGM{hoveredData ? `: ${hoveredData.glucose} mg/dL` : ""}
+          <span className="text-[#DC2626] font-sans">
+            1s HR: {currentDisplayHr} BPM
           </span>
-          <span className="text-[#991B1B] font-sans flex items-center gap-1">
-            <span className="w-2.5 h-0.5 bg-red-700 inline-block" />
-            HR{hoveredData ? `: ${hoveredData.heart_rate} BPM` : ""}
+          <span className="text-slate-600 font-mono-tech text-[11px]">
+            {activeBoutState} ({totalWindowSteps.toLocaleString()} st · {avgCadenceSpm} spm)
           </span>
-          <span className="text-[#7C3AED] font-sans flex items-center gap-1">
-            <span className="w-2.5 h-2.5 bg-purple-400 inline-block" />
-            Steps{hoveredData ? `: ${hoveredData.steps}` : ""}
-          </span>
-          {hoveredData && (
-            <span className="text-slate-700 font-mono-tech text-[11px] font-medium px-1.5 py-0.5 bg-slate-100 border border-slate-300">
-              {formatTimestamp(hoveredData.timestamp)}
+          {recentMeal && (
+            <span className="text-amber-900 bg-amber-50 border border-amber-300 px-1.5 py-0.5 text-[11px] font-mono-tech flex items-center gap-1 font-medium">
+              <span>🍽 Ingestion:</span>
+              <span className="font-bold">{recentMeal.carbs}g</span>
+              {recentMeal.bolus > 0 && <span className="text-blue-700">({recentMeal.bolus}U)</span>}
+              <span className="text-slate-500 font-normal">@{formatTimestamp(recentMeal.timestamp)}</span>
             </span>
           )}
         </div>
+
+        {hoveredData && (
+          <span className="text-slate-700 font-mono-tech text-[11px] font-medium px-1.5 py-0.5 bg-slate-100 border border-slate-300">
+            {formatTimestamp(hoveredData.timestamp)}
+          </span>
+        )}
       </div>
 
+      {/* ── STACKED DUAL-PLOT SVG (CGM UPPER + HR LOWER) ───────────────────── */}
       <svg
         className="w-full h-auto overflow-visible cursor-crosshair"
         viewBox={`0 0 ${svgWidth} ${svgHeight}`}
         onMouseMove={handleMouseMove}
         onMouseLeave={handleMouseLeave}
       >
-        {/* Dynamic Y Axis Guide Lines & Labels */}
-        {yTicks.map((val) => {
-          const y = getY(val);
+        {/* =================================================================== */}
+        {/* 1. UPPER PIECE: CONTINUOUS GLUCOSE MONITOR (CGM)                   */}
+        {/* =================================================================== */}
+
+        {/* Target Range Safe Zone Band: strictly mapped to CGM scale */}
+        <rect
+          x={padLeft}
+          y={cgmTargetTop}
+          width={plotWidth}
+          height={cgmTargetHeight}
+          fill="#D9EFE3"
+          opacity="0.80"
+        />
+
+        {/* CGM Grid lines & Y-Axis Labels */}
+        {cgmTicks.map((val) => {
+          const y = getY_CGM(val);
           return (
-            <g key={val}>
+            <g key={`cgm-tick-${val}`}>
               <line
                 x1={padLeft}
                 y1={y}
@@ -296,10 +392,10 @@ export default function TelemetryChart({ stream }: TelemetryChartProps) {
                 strokeWidth="1"
               />
               <text
-                x={padLeft - 10}
+                x={padLeft - 8}
                 y={y + 3.5}
                 textAnchor="end"
-                className="text-[11px] font-sans fill-slate-700 font-medium"
+                className="text-[10px] font-mono-tech fill-slate-500 font-medium"
               >
                 {val}
               </text>
@@ -307,87 +403,176 @@ export default function TelemetryChart({ stream }: TelemetryChartProps) {
           );
         })}
 
-        {/* Dynamic Target Range Band: Strictly Squared Corners */}
-        <rect
-          x={padLeft}
-          y={targetTopY}
-          width={plotWidth}
-          height={targetHeight}
-          fill="#D9EFE3"
-          opacity="0.85"
+        {/* Target 140 mg/dL and 70 mg/dL Hairline Guides */}
+        <line
+          x1={padLeft}
+          y1={cgmTargetTop}
+          x2={padLeft + plotWidth}
+          y2={cgmTargetTop}
+          stroke="#10B981"
+          strokeWidth="0.8"
+          strokeDasharray="2 3"
+          opacity="0.7"
+        />
+        <line
+          x1={padLeft}
+          y1={cgmTargetBottom}
+          x2={padLeft + plotWidth}
+          y2={cgmTargetBottom}
+          stroke="#10B981"
+          strokeWidth="0.8"
+          strokeDasharray="2 3"
+          opacity="0.7"
         />
 
-        {/* Physical Activity Steps (Subtle Histogram Bars) */}
-        {points.map((pt, i) => {
-          const barH = Math.min(28, (pt.steps / 350) * 28);
-          if (barH <= 1) return null;
-          const barW = Math.max(4, plotWidth / points.length - 8);
-          const isHovered = hoverIdx === i;
-          return (
-            <rect
-              key={`step-${i}`}
-              x={pt.x - barW / 2}
-              y={padTop + plotHeight - barH}
-              width={barW}
-              height={barH}
-              fill={isHovered ? "#7C3AED" : "#C4B5FD"}
-              opacity={isHovered ? 1 : 0.6}
-              className="rounded-none transition-colors"
-            />
-          );
-        })}
-
-        {/* Heart Rate Red Dashed Curve */}
-        {hrPath && (
-          <path
-            d={hrPath}
-            fill="none"
-            stroke="#991B1B"
-            strokeWidth="1.8"
-            strokeDasharray="4 4"
-          />
-        )}
-
-        {/* CGM Blue Spline Curve */}
+        {/* CGM Blue Continuous Spline Curve */}
         {cgmPath && (
           <path
             d={cgmPath}
             fill="none"
             stroke="#2563EB"
             strokeWidth="2.2"
+            strokeLinecap="round"
           />
         )}
 
-        {/* Interactive Hover Guides & Crosshairs */}
+        {/* ── Meal Ingestion Markers & Event Guidelines ── */}
+        {mealPoints.map((m, idx) => (
+          <g key={`meal-marker-${idx}`} className="transition-all">
+            {/* Vertical dashed guideline from CGM point to divider */}
+            <line
+              x1={m.x}
+              y1={cgmTop}
+              x2={m.x}
+              y2={cgmBottom}
+              stroke="#D97706"
+              strokeWidth="1.2"
+              strokeDasharray="2 3"
+              opacity="0.85"
+            />
+            {/* Meal Ingestion Pin on CGM Curve */}
+            <circle
+              cx={m.x}
+              cy={m.yG}
+              r="4.5"
+              fill="#F59E0B"
+              stroke="#FFFFFF"
+              strokeWidth="2"
+            />
+            {/* Meal Ingestion Pill Badge */}
+            <g
+              transform={`translate(${Math.max(
+                padLeft + 2,
+                Math.min(padLeft + plotWidth - (m.bolus > 0 ? 66 : 48), m.x - (m.bolus > 0 ? 33 : 24))
+              )}, ${Math.max(cgmTop + 2, m.yG - 22)})`}
+            >
+              <rect
+                x="0"
+                y="0"
+                width={m.bolus > 0 ? "66" : "48"}
+                height="16"
+                fill="#FFFBEB"
+                stroke="#D97706"
+                strokeWidth="1"
+                className="rounded-none shadow-sm"
+              />
+              <text
+                x={m.bolus > 0 ? "33" : "24"}
+                y="11.5"
+                textAnchor="middle"
+                className="text-[9px] font-mono-tech font-bold fill-amber-900"
+              >
+                🍽 {m.carbs}g{m.bolus > 0 ? `·${m.bolus}U` : ""}
+              </text>
+            </g>
+          </g>
+        ))}
+
+        {/* =================================================================== */}
+        {/* SUBTLE HORIZONTAL DIVIDER BETWEEN UPPER & LOWER PLOTS               */}
+        {/* =================================================================== */}
+        <line
+          x1={padLeft}
+          y1={118}
+          x2={padLeft + plotWidth}
+          y2={118}
+          stroke="#E2E8F0"
+          strokeWidth="1"
+          strokeDasharray="3 3"
+        />
+
+        {/* =================================================================== */}
+        {/* 2. LOWER PIECE: CONTINUOUS HEART RATE (BPM)                        */}
+        {/* =================================================================== */}
+
+        {/* HR Grid lines & Dedicated Y-Axis Labels */}
+        {hrTicks.map((val) => {
+          const y = getY_HR(val);
+          return (
+            <g key={`hr-tick-${val}`}>
+              <line
+                x1={padLeft}
+                y1={y}
+                x2={padLeft + plotWidth}
+                y2={y}
+                stroke="#F8FAFC"
+                strokeWidth="1"
+              />
+              <text
+                x={padLeft - 8}
+                y={y + 3.5}
+                textAnchor="end"
+                className="text-[10px] font-mono-tech fill-slate-500 font-medium"
+              >
+                {val}
+              </text>
+            </g>
+          );
+        })}
+
+        {/* HR Red Continuous Curve with Full Vertical Amplitude */}
+        {hrPath && (
+          <path
+            d={hrPath}
+            fill="none"
+            stroke="#DC2626"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+          />
+        )}
+
+        {/* =================================================================== */}
+        {/* 3. SYNCHRONIZED CROSSHAIR & HOVER INSPECTOR                         */}
+        {/* =================================================================== */}
         {hoveredPoint && hoveredData && (
           <g className="pointer-events-none">
-            {/* Vertical Hairline Guide */}
+            {/* Unified Vertical Hairline spanning across BOTH plots */}
             <line
               x1={hoveredPoint.x}
-              y1={padTop}
+              y1={cgmTop}
               x2={hoveredPoint.x}
-              y2={padTop + plotHeight}
+              y2={hrBottom}
               stroke="#64748B"
               strokeWidth="1"
               strokeDasharray="3 3"
             />
 
-            {/* CGM Active Dot */}
+            {/* Upper Plot Active Dot (CGM) */}
             <circle
               cx={hoveredPoint.x}
               cy={hoveredPoint.yG}
-              r="5"
+              r="4.5"
               fill="#2563EB"
               stroke="#FFFFFF"
               strokeWidth="2"
             />
 
-            {/* HR Active Dot */}
+            {/* Lower Plot Active Dot (HR) */}
             <circle
               cx={hoveredPoint.x}
-              cy={hoveredPoint.yHR}
-              r="4.5"
-              fill="#991B1B"
+              cy={hoveredHrPoint ? hoveredHrPoint.yHR : hoveredPoint.yHR}
+              r="4"
+              fill="#DC2626"
               stroke="#FFFFFF"
               strokeWidth="2"
             />
@@ -395,39 +580,52 @@ export default function TelemetryChart({ stream }: TelemetryChartProps) {
             {/* Floating Squared Tooltip Badge */}
             <g
               transform={`translate(${
-                hoveredPoint.x > padLeft + plotWidth - 135
-                  ? hoveredPoint.x - 138
+                hoveredPoint.x > padLeft + plotWidth - 145
+                  ? hoveredPoint.x - 150
                   : hoveredPoint.x + 12
-              }, ${Math.min(padTop + plotHeight - 70, Math.max(padTop - 5, hoveredPoint.yG - 35))})`}
+              }, ${Math.min(cgmBottom - 30, Math.max(cgmTop, hoveredPoint.yG - 30))})`}
             >
               <rect
                 x="0"
                 y="0"
-                width="126"
-                height="64"
+                width="138"
+                height={hoveredData.carb_input || hoveredData.bolus_volume_delivered ? "76" : "62"}
                 fill="#0F172A"
                 opacity="0.95"
                 className="rounded-none shadow-md"
               />
-              <rect x="0" y="0" width="3" height="64" fill="#2563EB" />
-              <text x="8" y="15" fill="#94A3B8" className="text-[10px] font-mono-tech font-medium">
+              <rect
+                x="0"
+                y="0"
+                width="3"
+                height={hoveredData.carb_input || hoveredData.bolus_volume_delivered ? "76" : "62"}
+                fill={hoveredData.carb_input ? "#F59E0B" : "#2563EB"}
+              />
+              <text x="8" y="14" fill="#94A3B8" className="text-[10px] font-mono-tech font-medium">
                 {formatTimestamp(hoveredData.timestamp)}
               </text>
-              <text x="8" y="30" fill="#60A5FA" className="text-[12px] font-semibold font-sans">
+              <text x="8" y="29" fill="#60A5FA" className="text-[12px] font-semibold font-sans">
                 CGM: {hoveredData.glucose} <tspan fill="#93C5FD" className="text-[9px] font-normal">mg/dL</tspan>
               </text>
-              <text x="8" y="44" fill="#F87171" className="text-[11px] font-semibold font-sans">
-                HR: {hoveredData.heart_rate} <tspan fill="#FCA5A5" className="text-[9px] font-normal">BPM</tspan>
+              <text x="8" y="43" fill="#F87171" className="text-[11px] font-semibold font-sans">
+                HR: {hoveredHrPoint ? hoveredHrPoint.heart_rate : hoveredData.heart_rate} <tspan fill="#FCA5A5" className="text-[9px] font-normal">BPM</tspan>
               </text>
-              <text x="8" y="57" fill="#C4B5FD" className="text-[10px] font-semibold font-sans">
-                Steps: {hoveredData.steps}
+              <text x="8" y="55" fill="#DDD6FE" className="text-[10px] font-mono-tech">
+                Step interval: {hoveredData.steps || 0}
               </text>
+              {(hoveredData.carb_input || hoveredData.bolus_volume_delivered) && (
+                <text x="8" y="69" fill="#FBBF24" className="text-[10px] font-mono-tech font-bold">
+                  🍽 +{hoveredData.carb_input || 0}g carbs · {hoveredData.bolus_volume_delivered || 0}U bolus
+                </text>
+              )}
             </g>
           </g>
         )}
 
-        {/* Dynamic Bottom X Axis Labels (Timeline) */}
-        <g transform={`translate(0, ${padTop + plotHeight + 18})`}>
+        {/* =================================================================== */}
+        {/* 4. SHARED BOTTOM TIMELINE X-AXIS LABELS                             */}
+        {/* =================================================================== */}
+        <g transform={`translate(0, ${hrBottom + 16})`}>
           {xTicks.map((tick, i) => {
             const xPos = padLeft + tick.pct * plotWidth;
             return (
@@ -435,7 +633,7 @@ export default function TelemetryChart({ stream }: TelemetryChartProps) {
                 key={`xtick-${i}`}
                 x={xPos}
                 textAnchor={tick.anchor as any}
-                className="text-[11px] font-sans fill-slate-700 font-medium"
+                className="text-[10px] font-mono-tech fill-slate-600 font-medium"
               >
                 {tick.label}
               </text>

@@ -106,7 +106,7 @@ export default function PatientRoster({
   };
 
   return (
-    <div className="w-full h-full p-4 bg-white hover:bg-slate-50/20 transition-colors duration-200 flex flex-col select-none rounded-none">
+    <div className="w-full h-full p-4 bg-white flex flex-col select-none rounded-none min-h-0 overflow-hidden">
       {/* 1. Header Title & Quick Cohort Info */}
       <div className="pb-3 border-b border-slate-200 mb-3">
         <div className="flex items-center justify-between">
@@ -181,7 +181,7 @@ export default function PatientRoster({
       </div>
 
       {/* 4. Structured Patient Cards Feed by Triage Category */}
-      <div className="flex-1 overflow-y-auto pt-3 space-y-4 pr-0.5">
+      <div className="flex-1 overflow-y-auto pt-3 space-y-4 pr-1 min-h-0">
         {loading ? (
           <div className="py-8 text-center text-xs text-slate-400 font-mono-tech">
             Loading triage cohort...
