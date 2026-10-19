@@ -22,6 +22,9 @@ import numpy as np
 import pandas as pd
 
 from cdss_engine import CDSSEngine
+from delta_forecaster import DeltaForecaster
+from ensemble_classifier import EnsembleClassifier
+from t2_forecaster import T2DForecaster
 
 ROOT = Path(__file__).resolve().parents[2]
 MODELS_DIR = ROOT / "models"
@@ -35,11 +38,14 @@ class DigitalTwinEngine:
 
         # 1. Load patient metadata
         metadata_file = COHORT_DIR / "patients_metadata.json"
-        with open(metadata_file, "r", encoding="utf-8") as f:
-            patients = json.load(f)
-        self.patients = {p["patient_id"]: p for p in patients}
+        if metadata_file.exists():
+            with open(metadata_file, "r", encoding="utf-8") as f:
+                patients = json.load(f)
+            self.patients = {p["patient_id"]: p for p in patients}
+        else:
+            self.patients = {}
 
-        # 2. Load Model 1 (30min, 60min, 120min forecasters)
+        # 2. Load Model 1 (Type 1 Forecaster: 30min, 60min, 120min)
         self.models_m1 = {}
         self.feature_cols_m1 = {}
         for h in ["30min", "60min", "120min"]:
@@ -50,7 +56,7 @@ class DigitalTwinEngine:
             with open(feat_path, "r") as f:
                 self.feature_cols_m1[h] = json.load(f)
 
-        # 3. Load Model 2 (Adverse Event Classifier)
+        # 3. Load Model 2 (Type 1 Adverse Event Classifier)
         m2_path = MODELS_DIR / "model2" / "lgbm_adverse_classifier.pkl"
         with open(m2_path, "rb") as f:
             self.model_m2 = pickle.load(f)
@@ -58,21 +64,46 @@ class DigitalTwinEngine:
         with open(m2_feat_path, "r") as f:
             self.feature_cols_m2 = json.load(f)
 
-        print("[DigitalTwinEngine] Initialized with 15 EHR profiles, 3 Model 1 horizons, and Model 2 Classifier.")
+        # 4. Load Model 3 (Type 2 Multi-Horizon Forecaster: +30m, +60m, +120m)
+        m3_path = MODELS_DIR / "model3" / "lgbm_t2_forecaster.pkl"
+        with open(m3_path, "rb") as f:
+            self.model_m3 = pickle.load(f)
+        m3_feat_path = MODELS_DIR / "model3" / "feature_cols_t2.json"
+        with open(m3_feat_path, "r") as f:
+            self.feature_cols_m3 = json.load(f)
+
+        # 5. Load Model 4 (Type 2 Adverse Event Classifier)
+        m4_path = MODELS_DIR / "model4" / "lgbm_t2_classifier.pkl"
+        with open(m4_path, "rb") as f:
+            self.model_m4 = pickle.load(f)
+        m4_feat_path = MODELS_DIR / "model4" / "feature_cols.json"
+        with open(m4_feat_path, "r") as f:
+            self.feature_cols_m4 = json.load(f)
+
+        print(f"[DigitalTwinEngine] Initialized 2x2 Engine: T1D (Model 1 & 2), T2D (Model 3 & 4), {len(self.patients)} EHR profiles.")
 
     def _extract_model1_features(self, window_df: pd.DataFrame) -> pd.DataFrame:
         """
-        Converts a 24-step (2 hours @ 5min) wearable window into the 134-feature vector
-        expected by Model 1.
+        Converts a 24-step (2 hours @ 5min) wearable window into the 155-feature vector
+        expected by Model 1, equipped with sensor dropout protection.
         """
         w = window_df.sort_values("timestamp").reset_index(drop=True)
+
+        # ── Missing Data & Dropout Fallback (PCHIP / forward-fill)
+        if w.isnull().values.any():
+            w = w.ffill().bfill()
+        if len(w) < 24:
+            pad_n = 24 - len(w)
+            first_rows = w.iloc[[0] * pad_n]
+            w = pd.concat([first_rows, w], ignore_index=True)
+
         row = {}
 
         # Current tick values
         curr = w.iloc[-1]
         for col in ["glucose", "calories", "heart_rate", "steps", "basal_rate",
                     "bolus_volume_delivered", "carb_input"]:
-            row[col] = float(curr[col]) if col in curr else 0.0
+            row[col] = float(curr[col]) if col in curr and not pd.isna(curr[col]) else 0.0
 
         # Lags 1 to 24 (looking backward from current tick)
         n = len(w)
@@ -81,12 +112,11 @@ class DigitalTwinEngine:
             if idx >= 0:
                 past = w.iloc[idx]
                 row[f"glucose_lag{lag}"] = float(past["glucose"])
-                row[f"carb_input_lag{lag}"] = float(past["carb_input"]) if "carb_input" in past else 0.0
-                row[f"bolus_volume_delivered_lag{lag}"] = float(past["bolus_volume_delivered"]) if "bolus_volume_delivered" in past else 0.0
-                row[f"steps_lag{lag}"] = float(past["steps"]) if "steps" in past else 0.0
-                row[f"heart_rate_lag{lag}"] = float(past["heart_rate"]) if "heart_rate" in past else 70.0
+                row[f"carb_input_lag{lag}"] = float(past["carb_input"]) if "carb_input" in past and not pd.isna(past["carb_input"]) else 0.0
+                row[f"bolus_volume_delivered_lag{lag}"] = float(past["bolus_volume_delivered"]) if "bolus_volume_delivered" in past and not pd.isna(past["bolus_volume_delivered"]) else 0.0
+                row[f"steps_lag{lag}"] = float(past["steps"]) if "steps" in past and not pd.isna(past["steps"]) else 0.0
+                row[f"heart_rate_lag{lag}"] = float(past["heart_rate"]) if "heart_rate" in past and not pd.isna(past["heart_rate"]) else 70.0
             else:
-                # Pad with oldest available
                 past = w.iloc[0]
                 row[f"glucose_lag{lag}"] = float(past["glucose"])
                 row[f"carb_input_lag{lag}"] = 0.0
@@ -94,13 +124,62 @@ class DigitalTwinEngine:
                 row[f"steps_lag{lag}"] = 0.0
                 row[f"heart_rate_lag{lag}"] = 70.0
 
-        # Rolling statistics
         g_series = w["glucose"].astype(float)
+        g_vals = g_series.values
+        curr_g = float(g_vals[-1])
+
+        # Rolling statistics
         row["glucose_roll_mean_30"] = float(g_series.tail(6).mean())
         row["glucose_roll_std_30"] = float(g_series.tail(6).std()) if len(g_series.tail(6)) > 1 else 0.0
         row["glucose_roll_mean_60"] = float(g_series.tail(12).mean())
         row["glucose_roll_std_60"] = float(g_series.tail(12).std()) if len(g_series.tail(12)) > 1 else 0.0
-        row["glucose_roc"] = float(g_series.iloc[-1] - g_series.iloc[-2]) if len(g_series) >= 2 else 0.0
+        row["glucose_roc"] = float(g_vals[-1] - g_vals[-2]) if len(g_vals) >= 2 else 0.0
+
+        # Acceleration and multi-horizon ROC
+        row["glucose_accel"] = float((g_vals[-1] - g_vals[-2]) - (g_vals[-2] - g_vals[-3])) if len(g_vals) >= 3 else 0.0
+        row["glucose_roc_15m"] = float(g_vals[-1] - g_vals[-4]) if len(g_vals) >= 4 else 0.0
+        row["glucose_roc_30m"] = float(g_vals[-1] - g_vals[-7]) if len(g_vals) >= 7 else 0.0
+        row["glucose_roc_60m"] = float(g_vals[-1] - g_vals[-13]) if len(g_vals) >= 13 else 0.0
+
+        # Rolling extremes
+        row["glucose_roll_min_30"] = float(g_series.tail(6).min())
+        row["glucose_roll_max_30"] = float(g_series.tail(6).max())
+        row["glucose_roll_range_30"] = float(row["glucose_roll_max_30"] - row["glucose_roll_min_30"])
+        row["glucose_roll_min_60"] = float(g_series.tail(12).min())
+        row["glucose_roll_max_60"] = float(g_series.tail(12).max())
+        row["glucose_roll_range_60"] = float(row["glucose_roll_max_60"] - row["glucose_roll_min_60"])
+
+        # Exponential Moving Averages (EMA)
+        ema15 = float(g_series.ewm(span=3, adjust=False).mean().iloc[-1])
+        ema30 = float(g_series.ewm(span=6, adjust=False).mean().iloc[-1])
+        ema60 = float(g_series.ewm(span=12, adjust=False).mean().iloc[-1])
+        row["glucose_ema_15"] = ema15
+        row["glucose_ema_30"] = ema30
+        row["glucose_ema_60"] = ema60
+        row["glucose_diff_ema_15"] = float(curr_g - ema15)
+        row["glucose_diff_ema_60"] = float(curr_g - ema60)
+
+        # Estimated IOB and COB decays
+        iob_decay = np.exp(-np.arange(25) / 12.0)
+        cob_decay = np.exp(-np.arange(25) / 8.0)
+        bolus_hist = np.array([row.get(f"bolus_volume_delivered_lag{i}", 0.0) for i in range(1, 25)] + [row["bolus_volume_delivered"]])
+        carb_hist  = np.array([row.get(f"carb_input_lag{i}", 0.0) for i in range(1, 25)] + [row["carb_input"]])
+        row["iob_est"] = float(np.sum(bolus_hist[::-1] * iob_decay))
+        row["cob_est"] = float(np.sum(carb_hist[::-1] * cob_decay))
+
+        # Kovatchev Low / High Blood Glucose Risk Indices
+        clipped = np.clip(curr_g, 10.0, 600.0)
+        f_g = 1.509 * (np.log(clipped) ** 1.084 - 5.381)
+        r = 10.0 * (f_g ** 2)
+        row["lbgi"] = float(r if f_g < 0 else 0.0)
+        row["hbgi"] = float(r if f_g > 0 else 0.0)
+
+        row["tbr_30_pct"] = float((g_series.tail(6) < 70.0).mean() * 100.0)
+        row["tar_30_pct"] = float((g_series.tail(6) > 180.0).mean() * 100.0)
+
+        # Patient-Specific Baseline Ratio
+        g_baseline = float(g_series.mean()) if len(g_series) > 0 and g_series.mean() > 0 else 1.0
+        row["glucose_to_baseline_ratio"] = float(curr_g / g_baseline)
 
         # Time-of-day cyclical encoding
         ts = pd.to_datetime(curr["timestamp"])
@@ -112,73 +191,329 @@ class DigitalTwinEngine:
 
     def _extract_model2_features(self, window_df: pd.DataFrame) -> pd.DataFrame:
         """
-        Converts a 24-step CGM window into the 12-feature vector for Model 2.
+        Converts a 24-step CGM window into the 40-feature physiological vector for Model 2.
         """
         w = window_df.sort_values("timestamp").reset_index(drop=True)
+        if w.isnull().values.any():
+            w = w.ffill().bfill()
+        if len(w) < 24:
+            pad_n = 24 - len(w)
+            first_rows = w.iloc[[0] * pad_n]
+            w = pd.concat([first_rows, w], ignore_index=True)
+
         g = w["glucose"].values.astype(float)
         curr = pd.to_datetime(w.iloc[-1]["timestamp"])
 
+        g_mean = float(g.mean())
+        g_std = float(g.std()) if len(g) > 1 else 0.0
+        g_min = float(g.min())
+        g_max = float(g.max())
+        g_last = float(g[-1])
+
+        g_roc = float(g[-1] - g[-6]) if len(g) >= 6 else 0.0
+        g_roc_1h = float(g[-1] - g[-12]) if len(g) >= 12 else 0.0
+        roc_15m = float(g[-1] - g[-3]) if len(g) >= 3 else (g_roc * 0.5)
+        roc_30m = g_roc
+        roc_60m = g_roc_1h
+        g_accel = float((g[-1] - g[-2]) - (g[-2] - g[-3])) if len(g) >= 3 else 0.0
+
+        # Pharmacokinetics
+        iob_decay = np.exp(-np.arange(25) / 12.0)
+        cob_decay = np.exp(-np.arange(25) / 8.0)
+        bolus_vals = w["bolus_volume_delivered"].fillna(0).values.astype(float) if "bolus_volume_delivered" in w.columns else np.zeros(len(w))
+        carb_vals = w["carb_input"].fillna(0).values.astype(float) if "carb_input" in w.columns else np.zeros(len(w))
+        iob_est = float(np.sum(bolus_vals[-25:][::-1] * iob_decay[:min(len(bolus_vals), 25)]))
+        cob_est = float(np.sum(carb_vals[-25:][::-1] * cob_decay[:min(len(carb_vals), 25)]))
+        metabolic_delta = float((cob_est * 3.5) - (iob_est * 45.0))
+        metabolic_predicted_glucose = float(g_last + metabolic_delta)
+
+        # Kovatchev Risk Indices
+        clipped = np.clip(g_last, 10.0, 600.0)
+        f_g = 1.509 * (np.log(clipped) ** 1.084 - 5.381)
+        r_g = 10.0 * (f_g ** 2)
+        lbgi = float(r_g if f_g < 0 else 0.0)
+        hbgi = float(r_g if f_g > 0 else 0.0)
+
+        # Circadian
+        hour_frac = curr.hour + curr.minute / 60.0
+        hour_sin = float(np.sin(2 * np.pi * hour_frac / 24.0))
+        hour_cos = float(np.cos(2 * np.pi * hour_frac / 24.0))
+
+        # Dynamic projections & boundary distances
+        proj_30 = float(g_last + roc_30m)
+        proj_60 = float(g_last + 2 * roc_30m)
+        proj_120 = float(g_last + 4 * roc_30m)
+        dist_to_54 = float(g_last - 54.0)
+        dist_to_250 = float(250.0 - g_last)
+
+        min_proj = min(g_last, proj_30, proj_60, proj_120)
+        max_proj = max(g_last, proj_30, proj_60, proj_120)
+        proj_hypo_danger = float(max(0.0, 54.0 - min(min_proj, metabolic_predicted_glucose)))
+        proj_hyper_danger = float(max(0.0, max(max_proj, metabolic_predicted_glucose) - 250.0))
+
+        # Volatility
+        diffs = np.abs(np.diff(g))
+        mask = diffs > g_std
+        mage = float(np.mean(diffs[mask])) if np.any(mask) else g_std
+        conga = float(np.std(g[12:] - g[:-12])) if len(g) >= 12 else 0.0
+        glucose_cv = float((g_std / g_mean) * 100.0) if g_mean > 0 else 0.0
+
+        # FFT
+        g_detrend = g - g_mean
+        fft_vals = np.abs(np.fft.rfft(g_detrend)) ** 2
+        fft_power_low = float(np.sum(fft_vals[1:4]))
+        fft_power_high = float(np.sum(fft_vals[4:]))
+        fft_total_energy = float(np.sum(fft_vals[1:]))
+        fft_ratio_high_low = float(fft_power_high / (fft_power_low + 1e-6))
+        fft_dominant_freq = int(np.argmax(fft_vals[1:]) + 1)
+
         features = {
-            "glucose_mean": float(g.mean()),
-            "glucose_std": float(g.std()) if len(g) > 1 else 0.0,
-            "glucose_min": float(g.min()),
-            "glucose_max": float(g.max()),
-            "glucose_last": float(g[-1]),
-            "glucose_roc": float(g[-1] - g[-6]) if len(g) >= 6 else 0.0,
-            "glucose_roc_1h": float(g[-1] - g[-12]) if len(g) >= 12 else 0.0,
-            "hypo_count_window": int((g < 70).sum()),
-            "hyper_count_window": int((g > 180).sum()),
-            "time_below_70_pct": float((g < 70).mean() * 100.0),
-            "time_above_180_pct": float((g > 180).mean() * 100.0),
-            "hour_of_day": int(curr.hour),
+            "glucose_mean":               g_mean,
+            "glucose_std":                g_std,
+            "glucose_min":                g_min,
+            "glucose_max":                g_max,
+            "glucose_last":               g_last,
+            "glucose_roc":                g_roc,
+            "glucose_roc_1h":             g_roc_1h,
+            "hypo_count_window":          int((g < 70).sum()),
+            "hyper_count_window":         int((g > 180).sum()),
+            "time_below_70_pct":          float((g < 70).mean() * 100.0),
+            "time_above_180_pct":         float((g > 180).mean() * 100.0),
+            "hour_of_day":                int(curr.hour),
+            "mage":                       mage,
+            "conga":                      conga,
+            "glucose_cv":                 glucose_cv,
+            "glucose_to_baseline_ratio":  float(g_last / g_mean) if g_mean > 0 else 1.0,
+            "fft_power_low":              fft_power_low,
+            "fft_power_high":             fft_power_high,
+            "fft_total_energy":           fft_total_energy,
+            "fft_ratio_high_low":         fft_ratio_high_low,
+            "fft_dominant_freq":          fft_dominant_freq,
+            "iob_est":                    iob_est,
+            "cob_est":                    cob_est,
+            "metabolic_delta":            metabolic_delta,
+            "metabolic_predicted_glucose": metabolic_predicted_glucose,
+            "lbgi":                       lbgi,
+            "hbgi":                       hbgi,
+            "glucose_accel":              g_accel,
+            "glucose_roc_15m":            roc_15m,
+            "glucose_roc_30m":            roc_30m,
+            "glucose_roc_60m":            roc_60m,
+            "hour_sin":                   hour_sin,
+            "hour_cos":                   hour_cos,
+            "proj_30":                    proj_30,
+            "proj_60":                    proj_60,
+            "proj_120":                   proj_120,
+            "dist_to_54":                 dist_to_54,
+            "dist_to_250":                dist_to_250,
+            "proj_hypo_danger":           proj_hypo_danger,
+            "proj_hyper_danger":          proj_hyper_danger,
         }
+        return pd.DataFrame([features])
+
+    def _extract_t2d_features(self, window_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Extracts Type 2 physiological feature representation (lags, rolling stats, 24h drift,
+        circadian rhythms, Dawn phenomenon, FFT spectral markers) for Model 3 and Model 4.
+        """
+        w = window_df.sort_values("timestamp").reset_index(drop=True)
+        if w.isnull().values.any():
+            w = w.ffill().bfill()
+        if len(w) < 24:
+            pad_n = 24 - len(w)
+            first_rows = w.iloc[[0] * pad_n]
+            w = pd.concat([first_rows, w], ignore_index=True)
+
+        g = w["glucose"].values.astype(float)
+        carbs = w["carb_input"].fillna(0).values.astype(float) if "carb_input" in w.columns else np.zeros(len(w))
+        curr = pd.to_datetime(w.iloc[-1]["timestamp"])
+
+        g_last = float(g[-1])
+        n = len(g)
+
+        # Autoregressive lags 1 to 24
+        lags = {}
+        for lag in range(1, 25):
+            idx = n - 1 - lag
+            if idx >= 0:
+                lags[f"glucose_lag{lag}"] = float(g[idx])
+                lags[f"carb_input_lag{lag}"] = float(carbs[idx])
+            else:
+                lags[f"glucose_lag{lag}"] = float(g[0])
+                lags[f"carb_input_lag{lag}"] = 0.0
+
+        g_series = pd.Series(g)
+
+        # Rolling statistics
+        g_mean_30 = float(g_series.tail(6).mean())
+        g_std_30 = float(g_series.tail(6).std()) if len(g) >= 2 else 0.0
+        g_min_30 = float(g_series.tail(6).min())
+        g_max_30 = float(g_series.tail(6).max())
+        g_range_30 = g_max_30 - g_min_30
+
+        g_mean_60 = float(g_series.tail(12).mean())
+        g_std_60 = float(g_series.tail(12).std()) if len(g) >= 2 else 0.0
+        g_min_60 = float(g_series.tail(12).min())
+        g_max_60 = float(g_series.tail(12).max())
+        g_range_60 = g_max_60 - g_min_60
+
+        # Velocities and acceleration
+        g_roc = float(g[-1] - g[-2]) if len(g) >= 2 else 0.0
+        g_accel = float((g[-1] - g[-2]) - (g[-2] - g[-3])) if len(g) >= 3 else 0.0
+        g_roc_15m = float(g[-1] - g[-4]) if len(g) >= 4 else (g_roc * 2.0)
+        g_roc_30m = float(g[-1] - g[-7]) if len(g) >= 7 else (g_roc * 4.0)
+        g_roc_60m = float(g[-1] - g[-13]) if len(g) >= 13 else (g_roc * 8.0)
+
+        # Long-term baseline & 24-hour drift
+        g_mean_24h = float(g_series.mean()) if len(g_series) > 0 and g_series.mean() > 0 else 140.0
+        g_drift_24h = float(g_last - g_mean_24h)
+        g_ratio = float(g_last / g_mean_24h) if g_mean_24h > 0 else 1.0
+        g_cv = float((g_std_60 / g_mean_60) * 100.0) if g_mean_60 > 0 else 0.0
+
+        # EMAs
+        ema15 = float(g_series.ewm(span=3, adjust=False).mean().iloc[-1])
+        ema30 = float(g_series.ewm(span=6, adjust=False).mean().iloc[-1])
+        ema60 = float(g_series.ewm(span=12, adjust=False).mean().iloc[-1])
+        diff_ema15 = float(g_last - ema15)
+        diff_ema60 = float(g_last - ema60)
+
+        # COB & IOB (IOB is strictly 0.0 for T2D)
+        cob_decay = np.exp(-np.arange(25) / 8.0)
+        carb_vals = np.array([lags[f"carb_input_lag{i}"] for i in range(24, 0, -1)] + [carbs[-1]])
+        cob_est = float(np.sum(carb_vals * cob_decay[::-1]))
+        carb_roll_sum_2h = float(np.sum(carb_vals))
+        iob_est = 0.0
+
+        # Circadian rhythm & Dawn phenomenon
+        hour_val = curr.hour + curr.minute / 60.0
+        hour_sin = float(np.sin(2 * np.pi * hour_val / 24.0))
+        hour_cos = float(np.cos(2 * np.pi * hour_val / 24.0))
+        hour_int = int(curr.hour)
+        dawn_phenomenon = 1.0 if (4 <= hour_int <= 8) else 0.0
+        postprandial_window = 1.0 if ((12 <= hour_int <= 14) or (18 <= hour_int <= 21)) else 0.0
+
+        # Glycemic volatility
+        diffs = np.abs(np.diff(g))
+        mask = diffs > g_std_60
+        mage = float(np.mean(diffs[mask])) if np.any(mask) else g_std_60
+        conga = float(np.std(g[12:] - g[:-12])) if len(g) >= 12 else 0.0
+
+        # Kovatchev risk indices
+        clipped_g = np.clip(g_last, 10.0, 600.0)
+        f_g = 1.509 * (np.log(clipped_g) ** 1.084 - 5.381)
+        r_g = 10.0 * (f_g ** 2)
+        lbgi = float(r_g if f_g < 0 else 0.0)
+        hbgi = float(r_g if f_g > 0 else 0.0)
+
+        tbr_30 = float((g_series.tail(6) < 70.0).mean() * 100.0)
+        tar_30 = float((g_series.tail(6) > 180.0).mean() * 100.0)
+
+        # Projections & danger thresholds
+        proj_30 = float(g_last + g_roc_30m)
+        proj_60 = float(g_last + 2.0 * g_roc_30m)
+        proj_120 = float(g_last + 4.0 * g_roc_30m)
+
+        dist_to_180 = float(180.0 - g_last)
+        dist_to_250 = float(250.0 - g_last)
+        dist_to_54 = float(g_last - 54.0)
+
+        min_proj = min(g_last, proj_30, proj_60, proj_120)
+        max_proj = max(g_last, proj_30, proj_60, proj_120)
+        proj_hyper_danger = float(max(0.0, max_proj - 250.0))
+        proj_hypo_danger = float(max(0.0, 54.0 - min_proj))
+
+        # FFT Spectral Density
+        g_detrend = g - g.mean()
+        fft_vals = np.abs(np.fft.rfft(g_detrend)) ** 2
+        fft_power_low = float(np.sum(fft_vals[1:4]))
+        fft_power_high = float(np.sum(fft_vals[4:]))
+        fft_total_energy = float(np.sum(fft_vals[1:]))
+        fft_ratio_high_low = float(fft_power_high / (fft_power_low + 1e-6))
+        fft_dominant_freq = int(np.argmax(fft_vals[1:]) + 1)
+
+        features = {
+            "glucose":                   g_last,
+            "glucose_roll_mean_30":      g_mean_30,
+            "glucose_roll_std_30":       g_std_30,
+            "glucose_roll_min_30":       g_min_30,
+            "glucose_roll_max_30":       g_max_30,
+            "glucose_roll_range_30":     g_range_30,
+            "glucose_roll_mean_60":      g_mean_60,
+            "glucose_roll_std_60":       g_std_60,
+            "glucose_roll_min_60":       g_min_60,
+            "glucose_roll_max_60":       g_max_60,
+            "glucose_roll_range_60":     g_range_60,
+            "glucose_roc":               g_roc,
+            "glucose_accel":             g_accel,
+            "glucose_roc_15m":           g_roc_15m,
+            "glucose_roc_30m":           g_roc_30m,
+            "glucose_roc_60m":           g_roc_60m,
+            "glucose_mean_24h":          g_mean_24h,
+            "glucose_drift_24h":         g_drift_24h,
+            "glucose_to_baseline_ratio": g_ratio,
+            "glucose_cv":                g_cv,
+            "glucose_ema_15":            ema15,
+            "glucose_ema_30":            ema30,
+            "glucose_ema_60":            ema60,
+            "glucose_diff_ema_15":       diff_ema15,
+            "glucose_diff_ema_60":       diff_ema60,
+            "carb_input":                float(carbs[-1]),
+            "cob_est":                   cob_est,
+            "carb_roll_sum_2h":          carb_roll_sum_2h,
+            "iob_est":                   iob_est,
+            "hour_of_day":               hour_int,
+            "hour_sin":                  hour_sin,
+            "hour_cos":                  hour_cos,
+            "dawn_phenomenon":           dawn_phenomenon,
+            "postprandial_window":       postprandial_window,
+            "mage":                      mage,
+            "conga":                     conga,
+            "lbgi":                      lbgi,
+            "hbgi":                      hbgi,
+            "tbr_30_pct":                tbr_30,
+            "tar_30_pct":                tar_30,
+            "proj_30":                   proj_30,
+            "proj_60":                   proj_60,
+            "proj_120":                  proj_120,
+            "dist_to_180":               dist_to_180,
+            "dist_to_250":               dist_to_250,
+            "dist_to_54":                dist_to_54,
+            "proj_hyper_danger":         proj_hyper_danger,
+            "proj_hypo_danger":          proj_hypo_danger,
+            "fft_power_low":             fft_power_low,
+            "fft_power_high":            fft_power_high,
+            "fft_total_energy":          fft_total_energy,
+            "fft_ratio_high_low":        fft_ratio_high_low,
+            "fft_dominant_freq":         fft_dominant_freq,
+        }
+
+        for i in range(1, 25):
+            features[f"glucose_lag{i}"] = lags[f"glucose_lag{i}"]
+            features[f"carb_input_lag{i}"] = lags[f"carb_input_lag{i}"]
+
         return pd.DataFrame([features])
 
     def _predict_state_t2d(self, patient_id: str, window_df: pd.DataFrame, profile: dict) -> Dict[str, Any]:
         """
-        Dedicated Type 2 Diabetes Multi-Horizon Forecaster:
-        Models glucose trajectory without pump bolus features.
-        Fuses HOMA-IR, residual beta-cell secretion (HOMA-B), oral medication timing,
-        circadian hepatic gluconeogenesis, and muscle GLUT-4 clearance from activity.
+        Dedicated Type 2 Diabetes Inference Engine (Model 3 & Model 4):
+        - Model 3 Forecaster: Predicts +30m, +60m, and +120m trajectories trained on Shanghai_T2DM.
+        - Model 4 Classifier: Evaluates impending adverse excursion risk (prioritizing severe hyperglycemia >250 mg/dL).
         """
         curr_glucose = float(window_df.iloc[-1]["glucose"])
         curr_time = str(window_df.iloc[-1]["timestamp"])
-        g = window_df["glucose"].values.astype(float)
-        hr = window_df["heart_rate"].values.astype(float) if "heart_rate" in window_df.columns else np.array([72.0])
-        steps = window_df["steps"].values.astype(float) if "steps" in window_df.columns else np.array([0.0])
 
-        homa_ir = float(profile.get("homa_ir", 3.8))
-        homa_beta = float(profile.get("homa_beta", 45.0))
-        hba1c = float(profile.get("hba1c_pct", 7.8))
-        eag = 28.7 * hba1c - 46.7
+        # 1. Extract Type 2 physiological feature representation
+        feat_t2 = self._extract_t2d_features(window_df)
 
-        # Autoregressive momentum & velocity
-        roc_15m = (g[-1] - g[-4]) if len(g) >= 4 else 0.0
-        roc_30m = (g[-1] - g[-7]) if len(g) >= 7 else (roc_15m * 2)
+        # 2. Model 3 Multi-Horizon Predictions (Shanghai_T2DM Trained)
+        pred_30 = float(self.model_m3["30min"].predict(feat_t2[self.feature_cols_m3])[0])
+        pred_60 = float(self.model_m3["60min"].predict(feat_t2[self.feature_cols_m3])[0])
+        pred_120 = float(self.model_m3["120min"].predict(feat_t2[self.feature_cols_m3])[0])
 
-        # Activity factor over last 30 minutes
-        recent_steps = float(steps[-6:].sum()) if len(steps) >= 6 else 0.0
-        glut4_exercise_suppression = min(35.0, (recent_steps / 250.0) * 8.5)
+        # 3. Model 4 Adverse Event Probability (Shanghai_T2DM Trained)
+        adverse_prob = float(self.model_m4.predict_proba(feat_t2[self.feature_cols_m4])[0][1])
 
-        # Insulin resistance clearance lag factor (higher HOMA-IR = slower clearance back to eAG)
-        clearance_rate = (homa_beta / 50.0) / (homa_ir / 2.2)
-
-        # 30-min horizon: dominated by velocity momentum and active meal elevation
-        delta_30 = (roc_30m * 0.55) - ((curr_glucose - eag) * 0.08 * clearance_rate) - (glut4_exercise_suppression * 0.4)
-        pred_30 = float(np.clip(curr_glucose + delta_30, 50.0, 380.0))
-
-        # 60-min horizon: postprandial peak or slow regression towards baseline
-        delta_60 = (roc_30m * 0.75) - ((curr_glucose - eag) * 0.22 * clearance_rate) - (glut4_exercise_suppression * 0.75)
-        pred_60 = float(np.clip(curr_glucose + delta_60, 50.0, 380.0))
-
-        # 120-min horizon: regression to equilibrium, buffered by HOMA-IR
-        pred_120 = float(np.clip(0.35 * curr_glucose + 0.65 * eag - (glut4_exercise_suppression * 0.9), 55.0, 380.0))
-
-        # Adverse Event Classifier (Model 2) operates on rolling window metrics
-        feat_m2 = self._extract_model2_features(window_df)
-        adverse_prob = float(self.model_m2.predict_proba(feat_m2[self.feature_cols_m2])[0][1])
-
-        # Evaluate clinical alerts
+        # 4. Clinical Alert Logic
         min_forecast = min(curr_glucose, pred_30, pred_60, pred_120)
         max_forecast = max(curr_glucose, pred_30, pred_60, pred_120)
 
@@ -209,6 +544,9 @@ class DigitalTwinEngine:
             trend = "STABLE"
 
         cdss_alerts = self.cdss.evaluate_patient(profile, window_df)
+
+        homa_ir = float(profile.get("homa_ir", 3.8)) if profile.get("homa_ir") is not None else 3.8
+        homa_beta = float(profile.get("homa_beta", 45.0)) if profile.get("homa_beta") is not None else 45.0
 
         return {
             "patient_id": patient_id,

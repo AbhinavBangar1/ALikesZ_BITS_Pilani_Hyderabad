@@ -1,0 +1,3 @@
+tier,split,auroc,f1,precision,recall,specificity,threshold
+Tier 2 (120-min),Test,0.947,0.6292,0.5272,0.7802,0.9479,0.7302
+Tier 1 (30-min),Test,0.9917,0.7052,0.5722,0.9189,0.9683,0.8088

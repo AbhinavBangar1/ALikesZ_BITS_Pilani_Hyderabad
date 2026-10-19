@@ -1,25 +1,35 @@
 """
-Model 2: Adverse Event Classifier — Data Preparation
-=====================================================
-Source: data-T1DM/DCLP3/Data Files/
-  - cgm.txt          : CGM readings (PtID, Period, DataDtTm, CGM in mg/dL)
-  - AdvEvent_a.txt   : Adverse events (Hyperglycemia, Hypoglycemia, DKA)
+Model 2: Adverse Glycemic Event Classifier — Data Preparation
+=============================================================
+Defines impending clinical adverse events based on ADA/EASD consensus guidelines:
+  - Level 2 Hypoglycemia (< 54 mg/dL)
+  - Severe Hyperglycemia / Ketosis Danger (> 250 mg/dL)
+within the NEXT 2 hours (Tier 2 proactive alert) and NEXT 30 minutes (Tier 1 urgent alert).
 
-Strategy:
-  - For each 2-hour rolling window of CGM per patient, label it 1 if
-    an adverse event occurred within the NEXT 2 hours, else 0.
-  - Features: statistical summaries of the CGM window + rate of change.
-  - Class imbalance handled via scale_pos_weight in LightGBM.
+Engineered Feature Space (40 Physiological Markers):
+  1. Baseline 12 Rolling Metrics:
+     glucose_mean, glucose_std, glucose_min, glucose_max, glucose_last,
+     glucose_roc, glucose_roc_1h, hypo_count_window, hyper_count_window,
+     time_below_70_pct, time_above_180_pct, hour_of_day
+  2. Glycemic Volatility:
+     mage, conga, glucose_cv (coefficient of variation)
+  3. Patient-Specific Baseline Ratio:
+     glucose_to_baseline_ratio (current glucose / historical window mean, default 1.0)
+  4. Frequency-Domain (FFT) Spectral Density:
+     fft_power_low, fft_power_high, fft_total_energy, fft_ratio_high_low, fft_dominant_freq
+  5. Pharmacokinetic Metabolic Decays:
+     iob_est, cob_est, metabolic_delta, metabolic_predicted_glucose
+  6. Non-linear Glycemic Risk & Acceleration:
+     lbgi, hbgi, glucose_accel, glucose_roc_15m, glucose_roc_30m, glucose_roc_60m, hour_sin, hour_cos
+  7. Multi-Horizon Trajectory Projections & Boundary Penetration Depths:
+     proj_30, proj_60, proj_120, dist_to_54, dist_to_250, proj_hypo_danger, proj_hyper_danger
 
-Split: 70% Train / 15% Val / 15% Test (time-based within each patient)
-
-Output:
+Outputs:
   - data/processed/model2/train.parquet
   - data/processed/model2/val.parquet
   - data/processed/model2/test.parquet
 """
 
-import re
 import warnings
 import numpy as np
 import pandas as pd
@@ -27,167 +37,197 @@ from pathlib import Path
 
 warnings.filterwarnings("ignore")
 
-# ── Paths ─────────────────────────────────────────────────────────────────────
-ROOT      = Path(__file__).resolve().parents[3]
-DCLP3_DIR = ROOT / "data-T1DM" / "DCLP3" / "Data Files"
-OUT_DIR   = ROOT / "data" / "processed" / "model2"
+ROOT = Path(__file__).resolve().parents[3]
+MODEL1_DATA_DIR = ROOT / "data" / "processed" / "model1"
+OUT_DIR = ROOT / "data" / "processed" / "model2"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-WINDOW_STEPS = 24   # 2-hour window at 5-min resolution
-HORIZON_STEPS = 24  # Look 2 hours ahead for adverse event
 
-
-# ── 1. Load CGM ───────────────────────────────────────────────────────────────
-def load_cgm() -> pd.DataFrame:
-    fpath = DCLP3_DIR / "cgm.txt"
-    df = pd.read_csv(fpath, sep="|")
-    df = df.rename(columns={"PtID": "patient_id", "DataDtTm": "timestamp", "CGM": "glucose"})
-
-    # Parse DCLP3's SAS datetime format: e.g. '12DEC17:00:04:24'
-    df["timestamp"] = pd.to_datetime(df["timestamp"], format="%d%b%y:%H:%M:%S", errors="coerce")
-    df = df.dropna(subset=["timestamp", "glucose"])
-    df["glucose"] = pd.to_numeric(df["glucose"], errors="coerce")
-    df = df.dropna(subset=["glucose"])
-    df = df.sort_values(["patient_id", "timestamp"]).reset_index(drop=True)
-    print(f"CGM loaded: {len(df):,} rows, {df['patient_id'].nunique()} patients")
-    return df
-
-
-# ── 2. Load Adverse Events ─────────────────────────────────────────────────────
-def load_adverse_events() -> pd.DataFrame:
-    fpath = DCLP3_DIR / "AdvEvent_a.txt"
-    df = pd.read_csv(fpath, sep="|", encoding="utf-16")
-    df = df.rename(columns={"PtID": "patient_id", "AEOnsetDt": "event_time"})
-
-    # Keep only glucose-related adverse events
-    df["event_time"] = pd.to_datetime(df["event_time"], errors="coerce")
-    df = df.dropna(subset=["event_time"])
-
-    # Tag event severity
-    df["event_type"] = df["ParentMedCondListID"].fillna("Unknown")
-
-    hypo_mask  = df["event_type"].str.contains("Hypoglycemia|hypo", case=False, na=False)
-    hyper_mask = df["event_type"].str.contains("Hyperglycemia|hyper|ketosis|DKA", case=False, na=False)
-    df = df[hypo_mask | hyper_mask].copy()
-
-    df = df[["patient_id", "event_time", "event_type"]]
-    print(f"Adverse events loaded: {len(df):,} events, {df['patient_id'].nunique()} patients")
-    return df
-
-
-# ── 3. Create Labeled Windows ─────────────────────────────────────────────────
-def create_labeled_windows(cgm_df: pd.DataFrame, events_df: pd.DataFrame) -> pd.DataFrame:
+def extract_model2_window_features(df_m1: pd.DataFrame) -> pd.DataFrame:
     """
-    Slide a 2-hour window across each patient's CGM time series.
-    Label = 1 if ANY adverse event occurs within the next 2 hours.
+    Extracts Model 2 feature matrix, FFT spectral markers, pharmacokinetic balances,
+    multi-horizon projections, and specialized clinical labels.
     """
-    records = []
-    all_patients = cgm_df["patient_id"].unique()
+    print(f"  Input rows: {len(df_m1):,}")
 
-    for pid in all_patients:
-        pt_cgm = cgm_df[cgm_df["patient_id"] == pid].reset_index(drop=True)
-        pt_events = events_df[events_df["patient_id"] == pid]["event_time"].values
+    # Glucose window array over past 24 steps
+    # lag24, lag23, ..., lag1, glucose
+    glucose_cols = [f"glucose_lag{i}" for i in range(24, 0, -1)] + ["glucose"]
+    g_matrix = df_m1[glucose_cols].values.astype(float)
 
-        # Resample patient CGM to uniform 5-min grid
-        pt_cgm = pt_cgm.set_index("timestamp")["glucose"]
-        pt_cgm = pt_cgm.resample("5min").mean().ffill(limit=3)
-        pt_cgm = pt_cgm.dropna()
+    # 1. Baseline 12 features
+    g_mean = np.mean(g_matrix, axis=1)
+    g_std  = np.std(g_matrix, axis=1)
+    g_min  = np.min(g_matrix, axis=1)
+    g_max  = np.max(g_matrix, axis=1)
+    g_last = df_m1["glucose"].values.astype(float)
+    g_roc  = g_last - df_m1["glucose_lag6"].values.astype(float)
+    g_roc_1h = g_last - df_m1["glucose_lag12"].values.astype(float)
 
-        glucose_vals = pt_cgm.values
-        timestamps   = pt_cgm.index
+    hypo_count  = np.sum(g_matrix < 70.0, axis=1)
+    hyper_count = np.sum(g_matrix > 180.0, axis=1)
+    time_below_70  = (hypo_count / 25.0) * 100.0
+    time_above_180 = (hyper_count / 25.0) * 100.0
 
-        n = len(glucose_vals)
-        if n < WINDOW_STEPS + HORIZON_STEPS:
-            continue
+    ts = pd.to_datetime(df_m1["timestamp"])
+    hour_of_day = ts.dt.hour.values
 
-        for i in range(WINDOW_STEPS, n - HORIZON_STEPS):
-            window = glucose_vals[i - WINDOW_STEPS: i]
-            window_end_time   = timestamps[i]
-            horizon_end_time  = timestamps[min(i + HORIZON_STEPS - 1, n - 1)]
+    # 2. Glycemic Volatility Features (CONGA, MAGE, CV)
+    conga = np.std(g_matrix[:, 12:] - g_matrix[:, :-12], axis=1)
 
-            # ── Features from 2-hour CGM window
-            feat = {
-                "patient_id":         pid,
-                "window_end_time":    window_end_time,
-                "glucose_mean":       window.mean(),
-                "glucose_std":        window.std(),
-                "glucose_min":        window.min(),
-                "glucose_max":        window.max(),
-                "glucose_last":       window[-1],
-                "glucose_roc":        window[-1] - window[-6] if len(window) >= 6 else 0,   # 30-min delta
-                "glucose_roc_1h":     window[-1] - window[-12] if len(window) >= 12 else 0, # 60-min delta
-                "hypo_count_window":  (window < 70).sum(),
-                "hyper_count_window": (window > 180).sum(),
-                "time_below_70_pct":  (window < 70).mean() * 100,
-                "time_above_180_pct": (window > 180).mean() * 100,
-                "hour_of_day":        window_end_time.hour,
-            }
+    diffs = np.abs(np.diff(g_matrix, axis=1))
+    sd_col = g_std[:, None]
+    mask = diffs > sd_col
+    sum_excursions = np.sum(np.where(mask, diffs, 0.0), axis=1)
+    count_excursions = np.sum(mask, axis=1)
+    mage = np.where(count_excursions > 0, sum_excursions / np.maximum(count_excursions, 1), g_std)
+    glucose_cv = np.where(g_mean > 0, (g_std / g_mean) * 100.0, 0.0)
 
-            # ── Label: any adverse event in next 2 hours?
-            label = 0
-            if len(pt_events) > 0:
-                upcoming = [
-                    t for t in pt_events
-                    if window_end_time <= pd.Timestamp(t) <= pd.Timestamp(horizon_end_time)
-                ]
-                label = 1 if len(upcoming) > 0 else 0
+    # 3. Patient-Specific Baseline Ratio (current glucose / window historical mean)
+    g_ratio = np.where(g_mean > 0, g_last / g_mean, 1.0)
+    g_ratio = np.nan_to_num(g_ratio, nan=1.0, posinf=1.0, neginf=1.0)
 
-            feat["label"] = label
-            records.append(feat)
+    # 4. Frequency-Domain (FFT) Spectral Density Features
+    g_detrend = g_matrix - g_mean[:, None]
+    fft_vals = np.fft.rfft(g_detrend, axis=1)
+    fft_power = np.abs(fft_vals) ** 2
 
-    df = pd.DataFrame(records)
-    print(f"\nWindowed dataset: {len(df):,} rows | Positive (adverse event) rate: {df['label'].mean():.3%}")
-    return df
+    # Low frequency power (slow drift: indices 1-3)
+    fft_power_low = np.sum(fft_power[:, 1:4], axis=1)
+    # High frequency power (rapid oscillations: indices 4-12)
+    fft_power_high = np.sum(fft_power[:, 4:], axis=1)
+    fft_total_energy = np.sum(fft_power[:, 1:], axis=1)
+    fft_ratio_high_low = np.where(fft_power_low > 0, fft_power_high / fft_power_low, 0.0)
+    fft_ratio_high_low = np.nan_to_num(fft_ratio_high_low, nan=0.0, posinf=0.0)
+    fft_dominant_freq = np.argmax(fft_power[:, 1:], axis=1) + 1
+
+    # 5. Pharmacokinetic Insulin & Carb Decays
+    iob_est = df_m1["iob_est"].values.astype(float) if "iob_est" in df_m1.columns else np.zeros(len(df_m1))
+    cob_est = df_m1["cob_est"].values.astype(float) if "cob_est" in df_m1.columns else np.zeros(len(df_m1))
+    metabolic_delta = (cob_est * 3.5) - (iob_est * 45.0)
+    metabolic_predicted_glucose = g_last + metabolic_delta
+
+    # 6. Non-linear Glycemic Risk & Trajectories
+    clipped_g = np.clip(g_last, 10.0, 600.0)
+    f_g = 1.509 * (np.log(clipped_g) ** 1.084 - 5.381)
+    r_g = 10.0 * (f_g ** 2)
+    lbgi = np.where(f_g < 0, r_g, 0.0)
+    hbgi = np.where(f_g > 0, r_g, 0.0)
+
+    g_accel = df_m1["glucose_accel"].values.astype(float) if "glucose_accel" in df_m1.columns else np.zeros(len(df_m1))
+    roc_15m = df_m1["glucose_roc_15m"].values.astype(float) if "glucose_roc_15m" in df_m1.columns else g_roc * 0.5
+    roc_30m = df_m1["glucose_roc_30m"].values.astype(float) if "glucose_roc_30m" in df_m1.columns else g_roc
+    roc_60m = df_m1["glucose_roc_60m"].values.astype(float) if "glucose_roc_60m" in df_m1.columns else g_roc_1h
+
+    hour_frac = ts.dt.hour.values + ts.dt.minute.values / 60.0
+    hour_sin = np.sin(2 * np.pi * hour_frac / 24.0)
+    hour_cos = np.cos(2 * np.pi * hour_frac / 24.0)
+
+    # 7. Multi-Horizon Projections & Penetration Depths
+    proj_30 = g_last + roc_30m
+    proj_60 = g_last + 2 * roc_30m
+    proj_120 = g_last + 4 * roc_30m
+
+    dist_to_54 = g_last - 54.0
+    dist_to_250 = 250.0 - g_last
+
+    min_proj = np.minimum(g_last, np.minimum(proj_30, np.minimum(proj_60, proj_120)))
+    max_proj = np.maximum(g_last, np.maximum(proj_30, np.maximum(proj_60, proj_120)))
+
+    proj_hypo_danger = np.maximum(0.0, 54.0 - np.minimum(min_proj, metabolic_predicted_glucose))
+    proj_hyper_danger = np.maximum(0.0, np.maximum(max_proj, metabolic_predicted_glucose) - 250.0)
+
+    # 8. Multi-Horizon Targets & Clinical Sub-types
+    t30 = df_m1["target_30min"].values.astype(float)
+    t60 = df_m1["target_60min"].values.astype(float)
+    t120 = df_m1["target_120min"].values.astype(float)
+
+    # Tier 2: 120-min Proactive Adverse Event (<54 mg/dL or >250 mg/dL)
+    target_hypo = ((t30 < 54.0) | (t60 < 54.0) | (t120 < 54.0)).astype(int)
+    target_hyper = ((t30 > 250.0) | (t60 > 250.0) | (t120 > 250.0)).astype(int)
+    labels_120 = (target_hypo | target_hyper).astype(int)
+
+    # Tier 1: 30-min Urgent Adverse Event (<54 mg/dL or >250 mg/dL)
+    labels_30 = ((t30 < 54.0) | (t30 > 250.0)).astype(int)
+
+    features_df = pd.DataFrame({
+        "patient_id":                 df_m1["patient_id"].values,
+        "window_end_time":            df_m1["timestamp"].values,
+        # Baseline 12
+        "glucose_mean":               g_mean,
+        "glucose_std":                g_std,
+        "glucose_min":                g_min,
+        "glucose_max":                g_max,
+        "glucose_last":               g_last,
+        "glucose_roc":                g_roc,
+        "glucose_roc_1h":             g_roc_1h,
+        "hypo_count_window":          hypo_count,
+        "hyper_count_window":         hyper_count,
+        "time_below_70_pct":          time_below_70,
+        "time_above_180_pct":         time_above_180,
+        "hour_of_day":                hour_of_day,
+        # Glycemic Volatility
+        "mage":                       mage,
+        "conga":                      conga,
+        "glucose_cv":                 glucose_cv,
+        # Patient-Specific Baseline Ratio
+        "glucose_to_baseline_ratio":  g_ratio,
+        # Frequency-Domain (FFT) Spectral Density
+        "fft_power_low":              fft_power_low,
+        "fft_power_high":             fft_power_high,
+        "fft_total_energy":           fft_total_energy,
+        "fft_ratio_high_low":         fft_ratio_high_low,
+        "fft_dominant_freq":          fft_dominant_freq,
+        # Pharmacokinetics
+        "iob_est":                    iob_est,
+        "cob_est":                    cob_est,
+        "metabolic_delta":            metabolic_delta,
+        "metabolic_predicted_glucose": metabolic_predicted_glucose,
+        # Non-linear Risk & Trajectory
+        "lbgi":                       lbgi,
+        "hbgi":                       hbgi,
+        "glucose_accel":              g_accel,
+        "glucose_roc_15m":            roc_15m,
+        "glucose_roc_30m":            roc_30m,
+        "glucose_roc_60m":            roc_60m,
+        "hour_sin":                   hour_sin,
+        "hour_cos":                   hour_cos,
+        # Projections & Boundary Distances
+        "proj_30":                    proj_30,
+        "proj_60":                    proj_60,
+        "proj_120":                   proj_120,
+        "dist_to_54":                 dist_to_54,
+        "dist_to_250":                dist_to_250,
+        "proj_hypo_danger":           proj_hypo_danger,
+        "proj_hyper_danger":          proj_hyper_danger,
+        # Target Labels & Clinical Sub-types
+        "label":                      labels_120,
+        "label_30min":                labels_30,
+        "target_hypo":                target_hypo,
+        "target_hyper":               target_hyper,
+        "is_hypo_event":              target_hypo,
+    })
+
+    print(f"  Processed rows: {len(features_df):,} | 120m Rate: {labels_120.mean():.2%} | Hypo: {target_hypo.mean():.2%} | Hyper: {target_hyper.mean():.2%}")
+    return features_df
 
 
-# ── 4. Split & Save ───────────────────────────────────────────────────────────
-def split_and_save(df: pd.DataFrame):
-    """
-    Time-based split within each patient: 70/15/15
-    """
-    train_parts, val_parts, test_parts = [], [], []
+def main():
+    print("=" * 60)
+    print("Model 2: Adverse Event Classifier — Data Preparation")
+    print("=" * 60)
 
-    for pid, grp in df.groupby("patient_id"):
-        grp = grp.sort_values("window_end_time").reset_index(drop=True)
-        n = len(grp)
-        t1 = int(n * 0.70)
-        t2 = int(n * 0.85)
-        train_parts.append(grp.iloc[:t1])
-        val_parts.append(grp.iloc[t1:t2])
-        test_parts.append(grp.iloc[t2:])
+    for split in ["train", "val", "test"]:
+        print(f"\nProcessing {split} split from {MODEL1_DATA_DIR / f'{split}.parquet'}...")
+        m1_df = pd.read_parquet(MODEL1_DATA_DIR / f"{split}.parquet")
+        m2_df = extract_model2_window_features(m1_df)
 
-    train_df = pd.concat(train_parts, ignore_index=True)
-    val_df   = pd.concat(val_parts,   ignore_index=True)
-    test_df  = pd.concat(test_parts,  ignore_index=True)
+        out_path = OUT_DIR / f"{split}.parquet"
+        m2_df.to_parquet(out_path, index=False)
+        print(f"  Saved {split} to {out_path}")
 
-    print(f"\nSplit sizes:")
-    print(f"  Train    : {len(train_df):,} rows | Positive rate: {train_df['label'].mean():.3%}")
-    print(f"  Validate : {len(val_df):,} rows | Positive rate: {val_df['label'].mean():.3%}")
-    print(f"  Test     : {len(test_df):,} rows | Positive rate: {test_df['label'].mean():.3%}")
-
-    train_df.to_parquet(OUT_DIR / "train.parquet", index=False)
-    val_df.to_parquet(OUT_DIR  / "val.parquet",   index=False)
-    test_df.to_parquet(OUT_DIR / "test.parquet",  index=False)
-    print(f"\nSaved to {OUT_DIR}/")
-    return train_df, val_df, test_df
+    print("\nModel 2 Data Preparation Complete.")
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    print("=" * 60)
-    print("Model 2 — Adverse Event Classifier: Data Preparation")
-    print("=" * 60)
-
-    print("\n[1/3] Loading DCLP3 CGM...")
-    cgm_df = load_cgm()
-
-    print("\n[2/3] Loading adverse events...")
-    events_df = load_adverse_events()
-
-    print("\n[3/3] Building labeled windows and splitting...")
-    windowed_df = create_labeled_windows(cgm_df, events_df)
-    train_df, val_df, test_df = split_and_save(windowed_df)
-
-    print("\nDone. Feature columns:")
-    feat_cols = [c for c in train_df.columns if c not in ["patient_id", "window_end_time", "label"]]
-    print(feat_cols)
+    main()
