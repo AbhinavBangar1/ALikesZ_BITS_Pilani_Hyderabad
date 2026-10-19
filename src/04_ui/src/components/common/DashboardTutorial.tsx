@@ -7,7 +7,6 @@ export interface TutorialStep {
   title: string;
   badge?: string;
   description: string;
-  tip?: string;
 }
 
 interface DashboardTutorialProps {
@@ -48,6 +47,10 @@ export default function DashboardTutorial({
     if (!isOpen) return;
     updateTargetPosition();
 
+    // Re-sample position as smooth scroll progresses and settles
+    const t1 = setTimeout(updateTargetPosition, 150);
+    const t2 = setTimeout(updateTargetPosition, 450);
+
     const handleResize = () => updateTargetPosition();
     const handleScroll = () => {
       const step = steps[currentStep];
@@ -62,6 +65,8 @@ export default function DashboardTutorial({
     window.addEventListener("scroll", handleScroll, true);
 
     return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
       window.removeEventListener("resize", handleResize);
       window.removeEventListener("scroll", handleScroll, true);
     };
@@ -188,12 +193,6 @@ export default function DashboardTutorial({
             <p className="mt-2.5 text-xs text-slate-700 leading-relaxed font-sans font-normal">
               {step.description}
             </p>
-            {step.tip && (
-              <div className="mt-3 p-2.5 bg-slate-50 border-l-2 border-blue-600 text-[11px] text-slate-600 font-mono-tech">
-                <span className="font-semibold text-slate-900">💡 Clinical Note: </span>
-                {step.tip}
-              </div>
-            )}
           </div>
 
           {/* Progress Segment Bar */}

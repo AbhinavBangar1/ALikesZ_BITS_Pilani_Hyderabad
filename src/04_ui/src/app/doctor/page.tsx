@@ -10,54 +10,119 @@ import TelemetryChart, { TelemetryRecord, LiveHrPoint } from "@/components/telem
 import CDSSActionCard, { CDSSAlert } from "@/components/doctor/CDSSActionCard";
 import DashboardTutorial, { TutorialStep } from "@/components/common/DashboardTutorial";
 
-const DOCTOR_TUTORIAL_STEPS: TutorialStep[] = [
+// New Redesigned Clinical Dashboard Sections
+import PatientHeaderSection from "@/components/doctor/PatientHeaderSection";
+import HeroKPISection from "@/components/doctor/HeroKPISection";
+import NowAndNextSection from "@/components/doctor/NowAndNextSection";
+import GlycaemicSummarySection from "@/components/doctor/GlycaemicSummarySection";
+import TypicalDaySection from "@/components/doctor/TypicalDaySection";
+import MealResponseSection from "@/components/doctor/MealResponseSection";
+import ForecastAccuracySection from "@/components/doctor/ForecastAccuracySection";
+
+/*
+PREVIOUS 6-STEP TUTORIAL (COMMENTED FOR EASY REVERT):
+const DOCTOR_TUTORIAL_STEPS_OLD: TutorialStep[] = [
   {
     targetId: "tutorial-roster",
     title: "1. Clinical Triage Roster",
     badge: "PATIENT COHORT",
     description:
-      "Displays all 15 cohort patients ranked dynamically by risk severity (Critical → High → Moderate → Low). Glucose readings and alert badges synchronize every 15 seconds. Selecting any patient loads their active physiological digital twin.",
-    tip: "Patients with acute hypoglycemia (<70 mg/dL) or ketoacidosis danger (>250 mg/dL) automatically rise to the top.",
+      "Displays all cohort patients categorized dynamically by risk severity (Critical → High → Moderate). Glucose readings and status synchronize every 15 seconds. Selecting any patient loads their active physiological digital twin.",
   },
   {
-    targetId: "tutorial-profile",
-    title: "2. Patient Clinical Phenotype",
+    targetId: "tutorial-header",
+    title: "2. Patient Baseline Phenotype",
     badge: "EHR & BIOMETRICS",
     description:
-      "Combines longitudinal Synthea EHR medical history with real-time biometric metrics: HbA1c, HOMA-IR / HOMA-β resistance indices, sensor lag, delivery system (AID closed-loop vs MDI), and target Time-in-Range (TIR).",
-    tip: "Demographics are culturally calibrated to Indian phenotypes with custom insulin sensitivity parameters.",
+      "Displays static medical baseline metrics tailored by diabetes type: ISF, ICR, Basal rate, HbA1c, BMI, and duration for Type 1; HOMA-IR, HOMA-β, and Fasting glucose for Type 2.",
   },
   {
-    targetId: "tutorial-telemetry",
-    title: "3. Multi-Modal Telemetry & Ingestion",
+    targetId: "tutorial-hero",
+    title: "3. Real-Time Telemetry KPIs",
     badge: "STREAMING BIO-IOT",
     description:
-      "A synchronized dual-plot streaming canvas: the upper curve charts continuous 15-second CGM glucose with amber meal ingestion pins (🍽 Carbs · 💉 Bolus); the lower curve renders 1-second cardiovascular telemetry with step cadence.",
-    tip: "Hover anywhere on the curve to inspect synchronized glucose, instantaneous HR, and exact meal consumption grams.",
+      "4 hero cards tracking Current CGM with rate-of-change velocity (mg/dL/min), live cardiac pulse, steps in the last hour, and active Therapy Context (Insulin on Board for T1D or Last Meal for T2D).",
   },
   {
-    targetId: "tutorial-risk",
-    title: "4. Adverse Event Risk Gauge",
-    badge: "MODEL 2 ENSEMBLE",
+    targetId: "tutorial-now-next",
+    title: "4. Measured & Predicted Glucose",
+    badge: "MODEL 1 TRAJECTORY",
     description:
-      "NIH DCLP3-validated XGBoost/Bi-LSTM adverse classifier (AUROC 0.944). Calculates the acute probability of severe hypoglycemia (<54 mg/dL) or acute hyperglycemia (>250 mg/dL) within the upcoming 2-hour window.",
-    tip: "When adverse risk exceeds 65%, automated CDSS alert patterns are triggered immediately.",
+      "Synchronized multi-modal chart showing historical continuous glucose, vertical reference line, future multi-horizon forecast with uncertainty confidence envelope, meal events, and aligned cardiac/step panes.",
   },
   {
-    targetId: "tutorial-trajectory",
-    title: "5. 2-Hour Predictive Trajectory",
-    badge: "MODEL 1 FORECAST",
+    targetId: "tutorial-glycaemic",
+    title: "5. Longitudinal Glycaemic Summary",
+    badge: "14-DAY EHR SENSOR USE",
     description:
-      "A physiological multi-horizon forecast engine projecting expected plasma glucose curves at +30m, +60m, and +120m horizons mapped directly against the target safe zone (70–140 mg/dL).",
-    tip: "Provides clinical early warnings up to two hours before physical symptoms or rebound spikes manifest.",
+      "International consensus metrics: Average Glucose, Time in Range (TIR), Time Below 70 (TBR), Time Above 180 (TAR), and Glucose Coefficient of Variation (CV%), followed by a continuous stacked AGP bar.",
   },
   {
-    targetId: "tutorial-cdss",
-    title: "6. CDSS Action Center",
-    badge: "DECISION SUPPORT",
+    targetId: "tutorial-patterns",
+    title: "6. Ambulatory Glucose Profile & Meals",
+    badge: "AGP MODAL & MEALS",
     description:
-      "Clinical Decision Support System continuously evaluates sensor telemetry for dangerous patterns (nocturnal dips, postprandial runaway, missed boluses). Clinicians can Acknowledge or Dismiss interventions directly.",
-    tip: "Acknowledging an alert updates the patient's care record and logs the clinical decision in the audit trail.",
+      "Standard 24-hour Ambulatory Glucose Profile (AGP) modal day curves with 5th, 25th, median (50th), 75th, and 95th percentiles, followed by post-prandial meal response tracking and twin validation.",
+  },
+];
+*/
+
+const DOCTOR_TUTORIAL_STEPS: TutorialStep[] = [
+  {
+    targetId: "tutorial-roster",
+    title: "1. Clinical Triage Roster",
+    badge: "COHORT TRIAGE",
+    description:
+      "Monitors the 15-patient cohort (8 Type 1 and 7 Type 2) prioritized by Model 2 adverse crisis risk. Categorized into Critical Triage, Elevated Risk, and Stable In-Range with 15-second real-time telemetry synchronization.",
+  },
+  {
+    targetId: "tutorial-header",
+    title: "2. Patient Phenotype & Baseline",
+    badge: "EHR BIOMETRICS",
+    description:
+      "Displays clinical baseline phenotype metrics dynamically tailored by diabetes type: ISF, ICR, Basal rate, and HbA1c for Type 1; HOMA-IR, HOMA-β, fasting glucose, and oral medications for Type 2.",
+  },
+  {
+    targetId: "tutorial-hero",
+    title: "3. Real-Time Telemetry Hero Strip",
+    badge: "STREAMING BIO-IOT",
+    description:
+      "Four high-frequency bio-IoT vitals: Current CGM with rate-of-change velocity (mg/dL/min), live cardiac pulse with beat-to-beat RR intervals, physical activity step bouts, and active therapy context (Insulin on Board for T1D or Last Meal for T2D).",
+  },
+  {
+    targetId: "tutorial-now-next",
+    title: "4. Measured & Predicted Glucose",
+    badge: "MODEL 1 TRAJECTORY",
+    description:
+      "Synchronized timeline with dynamic scale (lowest - 10 to highest + 10). Displays historical continuous CGM, vertical NOW line, forward-looking 2-hour Model 1 predictive forecast with 80% confidence interval, meal drop lines, and aligned cardiac/step panes.",
+  },
+  {
+    targetId: "tutorial-glycaemic",
+    title: "5. Longitudinal Glycaemic Summary",
+    badge: "14-DAY CONSENSUS",
+    description:
+      "International consensus sensor analytics: Mean glucose, Glycaemic Variability (CV% with ≤36% target), Time in Range (TIR 70–180 mg/dL, target >70%), TBR, TAR, and continuous stacked AGP distribution bar.",
+  },
+  {
+    targetId: "tutorial-patterns",
+    title: "6. Typical Day (Ambulatory Glucose Profile)",
+    badge: "24-H MODAL AGP",
+    description:
+      "Standard 24-hour Ambulatory Glucose Profile (AGP) modal curves showing 5th–95th percentile spread, 25th–75th interquartile range, 50th median trajectory, and clinical target reference lines highlighting diurnal phenomena like dawn spikes.",
+  },
+  {
+    targetId: "tutorial-meals",
+    title: "7. Meal Response Analysis",
+    badge: "POST-PRANDIAL DYNAMICS",
+    description:
+      "Tracks real clustered meal ingestion episodes (Breakfast, Lunch, Dinner, Snack) with carbohydrate intake, insulin bolus (T1D) or walk steps (T2D), pre-meal glucose, true peak, minutes to peak, glucose rise (+mg/dL), and back-in-range recovery.",
+  },
+  {
+    targetId: "tutorial-accuracy",
+    title: "8. Forecast Accuracy & Validation",
+    badge: "HELD-OUT VALIDATED",
+    description:
+      "Rigorous Model 1 empirical benchmarks evaluated on 50,000 held-out samples: MAE, RMSE, MARD, and Clarke Error Grid Zone A+B (>93%–98% across +30m, +60m, +120m horizons) against persistence, paired with a 24-hour actual vs predicted comparative curve.",
   },
 ];
 
@@ -72,6 +137,7 @@ export default function DoctorPortal() {
   const [stream, setStream] = useState<TelemetryRecord[]>([]);
   const [forecast, setForecast] = useState<TwinForecast | null>(null);
   const [cdssAlerts, setCdssAlerts] = useState<CDSSAlert[]>([]);
+  const [analytics, setAnalytics] = useState<any>(null);
   const [liveStreaming, setLiveStreaming] = useState<boolean>(true);
   const [liveBpm, setLiveBpm] = useState<number | undefined>(undefined);
   const [liveRr, setLiveRr] = useState<number | undefined>(undefined);
@@ -158,11 +224,12 @@ export default function DoctorPortal() {
   // Fetch detail for selected patient
   const fetchPatientDetail = async (id: string) => {
     try {
-      const [ehrRes, streamRes, forecastRes, cdssRes] = await Promise.all([
+      const [ehrRes, streamRes, forecastRes, cdssRes, analyticsRes] = await Promise.all([
         fetch(`http://127.0.0.1:8000/api/patient/${id}/ehr`),
-        fetch(`http://127.0.0.1:8000/api/patient/${id}/stream?points=80`),
+        fetch(`http://127.0.0.1:8000/api/patient/${id}/stream?points=144`),
         fetch(`http://127.0.0.1:8000/api/patient/${id}/twin-forecast`),
         fetch(`http://127.0.0.1:8000/api/patient/${id}/cdss`),
+        fetch(`http://127.0.0.1:8000/api/patient/${id}/analytics`),
       ]);
 
       if (ehrRes.ok) setEhr(await ehrRes.json());
@@ -175,6 +242,10 @@ export default function DoctorPortal() {
         const cdssData = await cdssRes.json();
         setCdssAlerts(cdssData.alerts || []);
       }
+      if (analyticsRes.ok) {
+        const analyticsData = await analyticsRes.json();
+        setAnalytics(analyticsData);
+      }
     } catch (err) {
       console.error("Failed to fetch patient detail:", err);
     }
@@ -186,12 +257,15 @@ export default function DoctorPortal() {
     fetchPatientDetail(selectedId);
   }, [selectedId]);
 
-  // 3. Live telemetry ticker & polling (15-second high-frequency simulation)
+  // 3. Live telemetry ticker & polling (15-second high-frequency simulation aligned to wall-clock)
   useEffect(() => {
     if (!selectedId || !liveStreaming) return;
 
     let tickCount = 0;
-    const timer = setInterval(async () => {
+    let timer: NodeJS.Timeout | null = null;
+    let initialTimeout: NodeJS.Timeout | null = null;
+
+    const doTick = async () => {
       try {
         tickCount++;
         // Advance simulation tick by 15 seconds
@@ -201,11 +275,12 @@ export default function DoctorPortal() {
           body: JSON.stringify({}),
         });
 
-        // Pull latest stream, forecast, and CDSS alerts
-        const [streamRes, forecastRes, cdssRes] = await Promise.all([
-          fetch(`http://127.0.0.1:8000/api/patient/${selectedId}/stream?points=80`),
+        // Pull latest stream, forecast, CDSS alerts, and analytics
+        const [streamRes, forecastRes, cdssRes, analyticsRes] = await Promise.all([
+          fetch(`http://127.0.0.1:8000/api/patient/${selectedId}/stream?points=144`),
           fetch(`http://127.0.0.1:8000/api/patient/${selectedId}/twin-forecast`),
           fetch(`http://127.0.0.1:8000/api/patient/${selectedId}/cdss`),
+          fetch(`http://127.0.0.1:8000/api/patient/${selectedId}/analytics`),
         ]);
 
         if (streamRes.ok) {
@@ -217,8 +292,12 @@ export default function DoctorPortal() {
           const cdssData = await cdssRes.json();
           setCdssAlerts(cdssData.alerts || []);
         }
+        if (analyticsRes.ok) {
+          const analyticsData = await analyticsRes.json();
+          setAnalytics(analyticsData);
+        }
 
-        // Periodically refresh entire cohort roster every 3rd tick (~9s)
+        // Periodically refresh entire cohort roster every 3rd tick (~45s)
         if (tickCount % 3 === 0) {
           const rosterRes = await fetch("http://127.0.0.1:8000/api/patients");
           if (rosterRes.ok) {
@@ -231,9 +310,22 @@ export default function DoctorPortal() {
       } catch (err) {
         console.error("Live streaming tick failed:", err);
       }
-    }, 3000);
+    };
 
-    return () => clearInterval(timer);
+    // Calculate milliseconds until next 15-second grid boundary (:00, :15, :30, :45)
+    const now = new Date();
+    const secMod = now.getSeconds() % 15;
+    const msUntilNext15s = (15 - secMod) * 1000 - now.getMilliseconds();
+
+    initialTimeout = setTimeout(() => {
+      doTick();
+      timer = setInterval(doTick, 15000);
+    }, Math.max(500, msUntilNext15s));
+
+    return () => {
+      if (initialTimeout) clearTimeout(initialTimeout);
+      if (timer) clearInterval(timer);
+    };
   }, [selectedId, liveStreaming]);
 
   // 4. Dynamically synchronize active patient's roster card with real-time synthetic telemetry
@@ -349,69 +441,157 @@ export default function DoctorPortal() {
           />
         </section>
 
-        {/* Remaining 80% area - Clean scrollable canvas without trailing void */}
-        <section className="w-full lg:w-[80%] h-full flex flex-col min-h-0 overflow-y-auto">
-          {/* Deck 1: Patient Profile (62.5%) | Adverse Event Risk (37.5%) */}
-          <div className="flex flex-col lg:flex-row border-b border-slate-200 shrink-0">
-            <div
-              id="tutorial-profile"
-              className="w-full lg:w-[62.5%] border-r border-slate-200 flex flex-col"
-            >
-              <PatientProfileCard
-                ehr={ehr}
-                currentGlucose={forecast?.current_glucose}
-                stream={stream}
-                liveBpm={liveBpm}
-              />
-            </div>
-            <div
-              id="tutorial-risk"
-              className="w-full lg:w-[37.5%] flex flex-col"
-            >
-              <AdverseRiskCard
-                adverseRiskProb={forecast?.adverse_risk_prob}
-                hyperRiskHigh={(forecast?.forecast?.t_plus_60min || 0) > 220}
-              />
-            </div>
-          </div>
-
-          {/* Deck 2: Live Telemetry Chart (62.5%) | 2-Hour Predictive Trajectory (37.5%) */}
-          <div className="flex flex-col lg:flex-row border-b border-slate-200 shrink-0">
-            <div
-              id="tutorial-telemetry"
-              className="w-full lg:w-[62.5%] border-r border-slate-200 flex flex-col"
-            >
-              <TelemetryChart
-                stream={stream}
-                liveHrHistory={liveHrHistory}
-                currentGlucose={forecast?.current_glucose}
-                liveBpm={liveBpm}
-                liveRr={liveRr}
-              />
-            </div>
-            <div
-              id="tutorial-trajectory"
-              className="w-full lg:w-[37.5%] flex flex-col"
-            >
-              <ForecastCard
-                forecast={forecast}
-                stream={stream}
-              />
-            </div>
-          </div>
-
-          {/* Deck 3: Clinical Decision Support System (CDSS) Action Center */}
-          <div
-            id="tutorial-cdss"
-            className="w-full flex flex-col shrink-0"
-          >
-            <CDSSActionCard
-              patientId={selectedId}
-              alerts={cdssAlerts}
-              onAcknowledge={handleAcknowledgeAlert}
-              onDismiss={handleDismissAlert}
+        {/* Remaining area - Clean scrollable canvas without trailing void */}
+        <section className="w-full lg:w-[80%] h-full flex flex-col min-h-0 overflow-y-auto bg-white divide-y divide-slate-200">
+          {/* 1. Patient Header & 6 Clinical Baseline Metrics */}
+          <div id="tutorial-header">
+            <PatientHeaderSection
+              name={analytics?.name || ehr?.name}
+              demographicsSummary={analytics?.demographics?.summary_tag}
+              deviceText={analytics?.demographics?.device}
+              baselineMetrics={analytics?.baseline_metrics}
             />
           </div>
+
+          {/* 2. Real-Time 4-Card Hero Strip */}
+          <div id="tutorial-hero">
+            <HeroKPISection
+              currentGlucose={
+                forecast?.current_glucose ??
+                (stream.length > 0 ? stream[stream.length - 1].glucose : 140)
+              }
+              glucoseRoc={analytics?.hero_kpis?.glucose_roc}
+              heartRate={
+                liveBpm ??
+                (stream.length > 0 ? stream[stream.length - 1].heart_rate : 72)
+              }
+              heartRateState={analytics?.hero_kpis?.heart_rate_state}
+              lastHourSteps={analytics?.hero_kpis?.last_hour_steps ?? 0}
+              stepsState={analytics?.hero_kpis?.steps_state}
+              therapyKpi={analytics?.hero_kpis?.therapy_kpi}
+            />
+          </div>
+
+          {/* 3. Section 01: Measured and predicted glucose */}
+          <div id="tutorial-now-next">
+            <NowAndNextSection
+              stream={stream}
+              forecast={forecast}
+              currentGlucose={forecast?.current_glucose}
+            />
+          </div>
+
+          {/* 4. Section 02: Glycaemic summary */}
+          <div id="tutorial-glycaemic">
+            <GlycaemicSummarySection
+              summary={analytics?.glycaemic_summary}
+            />
+          </div>
+
+          {/* 5. Section 03: Typical day (Ambulatory Glucose Profile) */}
+          <div id="tutorial-patterns">
+            <TypicalDaySection
+              agpData={analytics?.agp_profile}
+              agpNote={analytics?.agp_note}
+            />
+          </div>
+
+          {/* 6. Section 04: Meal response table */}
+          <div id="tutorial-meals">
+            <MealResponseSection
+              meals={analytics?.meal_responses}
+              averageRise={analytics?.average_rise}
+              summaryNote={analytics?.meal_summary_note}
+              diabetesType={analytics?.diabetes_type || ehr?.diabetes_type}
+            />
+          </div>
+
+          {/* 7. Section 05: Forecast accuracy for this patient */}
+          <div id="tutorial-accuracy">
+            <ForecastAccuracySection
+              validationCurve={analytics?.validation_curve}
+              accuracyTable={analytics?.validation?.accuracy_table}
+              badge={analytics?.validation?.badge || "HELD-OUT VALIDATED"}
+              isPlaceholder={analytics?.validation?.is_placeholder ?? false}
+            />
+          </div>
+
+          {/*
+          =======================================================
+          PREVIOUS DECK LAYOUT (COMMENTED FOR EASY REVERT):
+          =======================================================
+          <div className="hidden">
+            {/* Deck 1: Patient Profile (62.5%) | Adverse Event Risk (37.5%) *\/}
+            <div className="flex flex-col lg:flex-row border-b border-slate-200 shrink-0">
+              <div
+                id="tutorial-profile-old"
+                className="w-full lg:w-[62.5%] border-r border-slate-200 flex flex-col"
+              >
+                <PatientProfileCard
+                  ehr={ehr}
+                  currentGlucose={forecast?.current_glucose}
+                  stream={stream}
+                  liveBpm={liveBpm}
+                />
+              </div>
+              <div
+                id="tutorial-risk-old"
+                className="w-full lg:w-[37.5%] flex flex-col"
+              >
+                <AdverseRiskCard
+                  adverseRiskProb={forecast?.adverse_risk_prob}
+                  hyperRiskHigh={
+                    (forecast?.forecast?.t_plus_60min || 0) > 220 ||
+                    (forecast?.current_glucose || 0) > 220
+                  }
+                  currentGlucose={forecast?.current_glucose}
+                  riskTier={
+                    patients.find((p) => p.patient_id === selectedId)?.risk_tier ||
+                    ehr?.clinical_risk_tier
+                  }
+                />
+              </div>
+            </div>
+
+            {/* Deck 2: Live Telemetry Chart (62.5%) | 2-Hour Predictive Trajectory (37.5%) *\/}
+            <div className="flex flex-col lg:flex-row border-b border-slate-200 shrink-0">
+              <div
+                id="tutorial-telemetry-old"
+                className="w-full lg:w-[62.5%] border-r border-slate-200 flex flex-col"
+              >
+                <TelemetryChart
+                  stream={stream}
+                  liveHrHistory={liveHrHistory}
+                  currentGlucose={forecast?.current_glucose}
+                  liveBpm={liveBpm}
+                  liveRr={liveRr}
+                />
+              </div>
+              <div
+                id="tutorial-trajectory-old"
+                className="w-full lg:w-[37.5%] flex flex-col"
+              >
+                <ForecastCard
+                  forecast={forecast}
+                  stream={stream}
+                />
+              </div>
+            </div>
+
+            {/* Deck 3: Clinical Decision Support System (CDSS) Action Center *\/}
+            <div
+              id="tutorial-cdss-old"
+              className="w-full flex flex-col shrink-0"
+            >
+              <CDSSActionCard
+                patientId={selectedId}
+                alerts={cdssAlerts}
+                onAcknowledge={handleAcknowledgeAlert}
+                onDismiss={handleDismissAlert}
+              />
+            </div>
+          </div>
+          */}
         </section>
       </main>
 

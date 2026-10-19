@@ -116,7 +116,8 @@ export default function TelemetryChart({ stream, liveHrHistory, currentGlucose, 
   const hrHeight = 64;
   const hrBottom = hrTop + hrHeight;
 
-  // ── 1. UPPER PIECE: CGM HARDCODED CLINICAL SCALE (40 - 350 mg/dL) ─────────
+  // ── 1. UPPER PIECE: CGM EVEN CLINICAL SCALE (0 - 400 mg/dL, 100-step ticks) ──────
+  /* OLD CODE (Uneven ticks: 400, 300, 250, 180, 140, 70):
   const { minCGM, maxCGM, cgmTicks } = useMemo(() => {
     const gVals = visibleData.map((d) => d.glucose).filter((g) => g && !isNaN(g));
     const rawMax = gVals.length > 0 ? Math.max(...gVals) : 180;
@@ -125,6 +126,12 @@ export default function TelemetryChart({ stream, liveHrHistory, currentGlucose, 
     const ticks = calcMax > 350 ? [calcMax, 300, 250, 180, 140, 70] : [300, 250, 180, 140, 70];
     return { minCGM: calcMin, maxCGM: calcMax, cgmTicks: ticks };
   }, [visibleData]);
+  */
+
+  // NEW EVEN SCALE: Clean 100 mg/dL steps (0, 100, 200, 300, 400) for zero crowding
+  const minCGM = 0;
+  const maxCGM = 400;
+  const cgmTicks = [400, 300, 200, 100, 0];
 
   const getY_CGM = (val: number) => {
     const clamped = Math.max(minCGM, Math.min(maxCGM, val));
@@ -136,7 +143,8 @@ export default function TelemetryChart({ stream, liveHrHistory, currentGlucose, 
   const cgmTargetBottom = getY_CGM(70);
   const cgmTargetHeight = Math.max(4, cgmTargetBottom - cgmTargetTop);
 
-  // ── 2. LOWER PIECE: HEART RATE HARDCODED CLINICAL SCALE (40 - 140 BPM) ───
+  // ── 2. LOWER PIECE: HEART RATE CLINICAL SCALE (40 - 140 BPM) ───
+  /* OLD CODE:
   const { minHR, maxHR, hrTicks } = useMemo(() => {
     const hrData = liveHrHistory && liveHrHistory.length > 0 ? liveHrHistory : visibleData;
     const hrVals = hrData.map((d) => d.heart_rate).filter((h) => h && !isNaN(h));
@@ -146,6 +154,10 @@ export default function TelemetryChart({ stream, liveHrHistory, currentGlucose, 
     const ticks = calcMax > 140 ? [calcMax, 100, 60] : [140, 100, 60];
     return { minHR: calcMin, maxHR: calcMax, hrTicks: ticks };
   }, [liveHrHistory, visibleData]);
+  */
+  const minHR = 40;
+  const maxHR = 140;
+  const hrTicks = [140, 100, 60];
 
   const getY_HR = (val: number) => {
     const clamped = Math.max(minHR, Math.min(maxHR, val));
@@ -337,11 +349,18 @@ export default function TelemetryChart({ stream, liveHrHistory, currentGlucose, 
           <span className="text-[#DC2626] font-sans">
             1s HR: {currentDisplayHr} BPM
           </span>
+          {/* OLD CRYPTIC LABEL:
           <span className="text-slate-600 font-mono-tech text-[11px]">
             {activeBoutState} ({totalWindowSteps.toLocaleString()} st · {avgCadenceSpm} spm)
           </span>
+          */}
+          <span className="text-slate-600 font-sans text-xs font-medium">
+            {totalWindowSteps === 0
+              ? "Resting (0 steps)"
+              : `${activeBoutState} (${totalWindowSteps.toLocaleString()} steps)`}
+          </span>
           {recentMeal && (
-            <span className="text-amber-900 bg-amber-50 border border-amber-300 px-1.5 py-0.5 text-[11px] font-mono-tech flex items-center gap-1 font-medium">
+            <span className="text-amber-900 bg-amber-50 border border-amber-300 px-1.5 py-0.5 text-[11px] font-sans flex items-center gap-1 font-medium">
               <span>🍽 Ingestion:</span>
               <span className="font-bold">{recentMeal.carbs}g</span>
               {recentMeal.bolus > 0 && <span className="text-blue-700">({recentMeal.bolus}U)</span>}
@@ -351,7 +370,8 @@ export default function TelemetryChart({ stream, liveHrHistory, currentGlucose, 
         </div>
 
         {hoveredData && (
-          <span className="text-slate-700 font-mono-tech text-[11px] font-medium px-1.5 py-0.5 bg-slate-100 border border-slate-300">
+          /* OLD: <span className="text-slate-700 font-mono-tech text-[11px] font-medium px-1.5 py-0.5 bg-slate-100 border border-slate-300"> */
+          <span className="text-slate-700 font-sans text-xs font-semibold px-2 py-0.5 bg-slate-100 border border-slate-300">
             {formatTimestamp(hoveredData.timestamp)}
           </span>
         )}
@@ -391,11 +411,12 @@ export default function TelemetryChart({ stream, liveHrHistory, currentGlucose, 
                 stroke="#F1F5F9"
                 strokeWidth="1"
               />
+              {/* OLD: <text x={padLeft - 8} y={y + 3.5} textAnchor="end" className="text-[10px] font-mono-tech fill-slate-500 font-medium"> */}
               <text
                 x={padLeft - 8}
                 y={y + 3.5}
                 textAnchor="end"
-                className="text-[10px] font-mono-tech fill-slate-500 font-medium"
+                className="text-[10px] font-sans fill-slate-500 font-medium"
               >
                 {val}
               </text>
@@ -488,17 +509,15 @@ export default function TelemetryChart({ stream, liveHrHistory, currentGlucose, 
           </g>
         ))}
 
-        {/* =================================================================== */}
-        {/* SUBTLE HORIZONTAL DIVIDER BETWEEN UPPER & LOWER PLOTS               */}
-        {/* =================================================================== */}
-        <line
-          x1={padLeft}
-          y1={118}
-          x2={padLeft + plotWidth}
-          y2={118}
-          stroke="#E2E8F0"
+        {/* Boundary Surrounding Upper CGM Graph */}
+        <rect
+          x={padLeft}
+          y={cgmTop}
+          width={plotWidth}
+          height={cgmHeight}
+          fill="none"
+          stroke="#94A3B8"
           strokeWidth="1"
-          strokeDasharray="3 3"
         />
 
         {/* =================================================================== */}
@@ -518,11 +537,12 @@ export default function TelemetryChart({ stream, liveHrHistory, currentGlucose, 
                 stroke="#F8FAFC"
                 strokeWidth="1"
               />
+              {/* OLD: <text x={padLeft - 8} y={y + 3.5} textAnchor="end" className="text-[10px] font-mono-tech fill-slate-500 font-medium"> */}
               <text
                 x={padLeft - 8}
                 y={y + 3.5}
                 textAnchor="end"
-                className="text-[10px] font-mono-tech fill-slate-500 font-medium"
+                className="text-[10px] font-sans fill-slate-500 font-medium"
               >
                 {val}
               </text>
@@ -540,6 +560,17 @@ export default function TelemetryChart({ stream, liveHrHistory, currentGlucose, 
             strokeLinecap="round"
           />
         )}
+
+        {/* Boundary Surrounding Lower Heart Rate Graph */}
+        <rect
+          x={padLeft}
+          y={hrTop}
+          width={plotWidth}
+          height={hrHeight}
+          fill="none"
+          stroke="#94A3B8"
+          strokeWidth="1"
+        />
 
         {/* =================================================================== */}
         {/* 3. SYNCHRONIZED CROSSHAIR & HOVER INSPECTOR                         */}
@@ -601,7 +632,8 @@ export default function TelemetryChart({ stream, liveHrHistory, currentGlucose, 
                 height={hoveredData.carb_input || hoveredData.bolus_volume_delivered ? "76" : "62"}
                 fill={hoveredData.carb_input ? "#F59E0B" : "#2563EB"}
               />
-              <text x="8" y="14" fill="#94A3B8" className="text-[10px] font-mono-tech font-medium">
+              {/* OLD: <text x="8" y="14" fill="#94A3B8" className="text-[10px] font-mono-tech font-medium"> */}
+              <text x="8" y="14" fill="#94A3B8" className="text-[10px] font-sans font-medium">
                 {formatTimestamp(hoveredData.timestamp)}
               </text>
               <text x="8" y="29" fill="#60A5FA" className="text-[12px] font-semibold font-sans">
@@ -610,11 +642,13 @@ export default function TelemetryChart({ stream, liveHrHistory, currentGlucose, 
               <text x="8" y="43" fill="#F87171" className="text-[11px] font-semibold font-sans">
                 HR: {hoveredHrPoint ? hoveredHrPoint.heart_rate : hoveredData.heart_rate} <tspan fill="#FCA5A5" className="text-[9px] font-normal">BPM</tspan>
               </text>
-              <text x="8" y="55" fill="#DDD6FE" className="text-[10px] font-mono-tech">
+              {/* OLD: <text x="8" y="55" fill="#DDD6FE" className="text-[10px] font-mono-tech"> */}
+              <text x="8" y="55" fill="#94A3B8" className="text-[10px] font-sans">
                 Step interval: {hoveredData.steps || 0}
               </text>
               {(hoveredData.carb_input || hoveredData.bolus_volume_delivered) && (
-                <text x="8" y="69" fill="#FBBF24" className="text-[10px] font-mono-tech font-bold">
+                /* OLD: <text x="8" y="69" fill="#FBBF24" className="text-[10px] font-mono-tech font-bold"> */
+                <text x="8" y="69" fill="#FBBF24" className="text-[10px] font-sans font-semibold">
                   🍽 +{hoveredData.carb_input || 0}g carbs · {hoveredData.bolus_volume_delivered || 0}U bolus
                 </text>
               )}
@@ -629,11 +663,12 @@ export default function TelemetryChart({ stream, liveHrHistory, currentGlucose, 
           {xTicks.map((tick, i) => {
             const xPos = padLeft + tick.pct * plotWidth;
             return (
+              /* OLD: <text key={`xtick-${i}`} x={xPos} textAnchor={tick.anchor as any} className="text-[10px] font-mono-tech fill-slate-600 font-medium"> */
               <text
                 key={`xtick-${i}`}
                 x={xPos}
                 textAnchor={tick.anchor as any}
-                className="text-[10px] font-mono-tech fill-slate-600 font-medium"
+                className="text-[10px] font-sans fill-slate-600 font-medium"
               >
                 {tick.label}
               </text>

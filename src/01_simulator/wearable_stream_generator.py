@@ -410,8 +410,14 @@ class WearableStreamSimulator:
         # 4. Interstitial CGM Sensor Lag (8 - 12 min first-order diffusion filter)
         # alpha_sensor = 1 / 40 ticks (~10 minutes)
         alpha_sensor = 0.025
-        sensor_noise = self.rng.normal(0, 0.20)
-        self.sensor_glucose += alpha_sensor * (self.plasma_glucose - self.sensor_glucose) + sensor_noise
+        # OLD STATIC NOISE:
+        # sensor_noise = self.rng.normal(0, 0.20)
+        # self.sensor_glucose += alpha_sensor * (self.plasma_glucose - self.sensor_glucose) + sensor_noise
+        #
+        # NEW ORGANIC METABOLIC MICRO-MOMENTUM (Ensures continuous physiological movement, eliminates dead flat lines):
+        drift = getattr(self, "_micro_drift", 0.0) * 0.88 + float(self.rng.normal(0, 0.35))
+        self._micro_drift = float(np.clip(drift, -1.8, 1.8))
+        self.sensor_glucose += alpha_sensor * (self.plasma_glucose - self.sensor_glucose) + self._micro_drift
         self.sensor_glucose = float(np.clip(self.sensor_glucose, 40.0, 400.0))
 
         basal_15sec = np.round(self.basal_rate / 240.0, 5) if self.basal_rate > 0 else 0.0
@@ -469,13 +475,29 @@ class CohortLiveStreamManager:
                         sim.sensor_glucose = float(last_row["glucose"])
                         sim.plasma_glucose = sim.sensor_glucose
                         sim.current_hr = float(last_row.get("heart_rate", 70.0))
-                        sim.last_timestamp = datetime.strptime(str(last_row["timestamp"]), "%Y-%m-%d %H:%M:%S")
+                        last_ts = datetime.strptime(str(last_row["timestamp"]), "%Y-%m-%d %H:%M:%S")
+
+                        # Auto-align stream timestamps to current live clock if out-of-sync
+                        now = datetime.now()
+                        aligned_sec = (now.second // 15) * 15
+                        target_now = now.replace(second=aligned_sec, microsecond=0)
+                        time_diff = (target_now - last_ts).total_seconds()
+
+                        if abs(time_diff) > 45:
+                            delta = target_now - last_ts
+                            df["timestamp"] = pd.to_datetime(df["timestamp"]) + delta
+                            df["timestamp"] = df["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
+                            df.to_csv(stream_file, index=False)
+                            sim.last_timestamp = target_now
+                        else:
+                            sim.last_timestamp = last_ts
 
                         # Populate initial 1-second pulse buffer
                         recent_hr = sim.current_hr
-                        now = sim.last_timestamp or datetime.now()
+                        buf_now = sim.last_timestamp or datetime.now()
+                        sim.hr_1s_buffer.clear()
                         for s in range(60, 0, -1):
-                            t_sec = now - timedelta(seconds=s)
+                            t_sec = buf_now - timedelta(seconds=s)
                             sim.hr_1s_buffer.append({
                                 "timestamp": t_sec.strftime("%Y-%m-%d %H:%M:%S"),
                                 "heart_rate": int(round(recent_hr)),
@@ -483,10 +505,62 @@ class CohortLiveStreamManager:
                                 "activity_state": "SEDENTARY",
                                 "steps": 0
                             })
-                except Exception:
+                except Exception as e:
                     pass
 
             self.simulators[pid] = sim
+
+    def ensure_patient_aligned(self, patient_id: str):
+        """
+        Dynamically aligns the patient's continuous 15-second wearable telemetry stream
+        with the current real-time clock. If the latest record lags or drifts by > 20s,
+        shifts all timestamps by delta = target_now - last_timestamp, preserving
+        continuous 15-second physiological trajectories right up to the current second.
+        """
+        if patient_id not in self.simulators:
+            return
+
+        sim = self.simulators[patient_id]
+        stream_file = OUT_STREAM_DIR / f"{patient_id}_stream.csv"
+        if not stream_file.exists():
+            return
+
+        now = datetime.now()
+        aligned_sec = (now.second // 15) * 15
+        target_now = now.replace(second=aligned_sec, microsecond=0)
+
+        last_ts = sim.last_timestamp
+        if last_ts is None:
+            try:
+                df_tail = pd.read_csv(stream_file).tail(1)
+                if not df_tail.empty:
+                    last_ts = datetime.strptime(str(df_tail.iloc[-1]["timestamp"]), "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                pass
+
+        if last_ts is None:
+            return
+
+        time_diff = (target_now - last_ts).total_seconds()
+        # If timestamp is out of sync by more than 20 seconds, shift the stream
+        if abs(time_diff) > 20:
+            try:
+                df = pd.read_csv(stream_file)
+                delta = target_now - last_ts
+                df["timestamp"] = pd.to_datetime(df["timestamp"]) + delta
+                df["timestamp"] = df["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
+                if len(df) > 5760:
+                    df = df.tail(5760).reset_index(drop=True)
+                df.to_csv(stream_file, index=False)
+
+                sim.last_timestamp = target_now
+                sim.current_time = target_now
+                last_row = df.iloc[-1]
+                sim.sensor_glucose = float(last_row["glucose"])
+                sim.plasma_glucose = sim.sensor_glucose
+                sim.current_hr = float(last_row.get("heart_rate", 70.0))
+            except Exception as e:
+                print(f"[CohortManager] Alignment error for {patient_id}: {e}")
 
     def get_patient_live_hr(self, patient_id: str, seconds: int = 60) -> List[dict]:
         """Returns the continuous 1-second pulse stream for live telemetry view, advancing 1s."""
@@ -494,30 +568,46 @@ class CohortLiveStreamManager:
             raise KeyError(f"Patient {patient_id} not found in simulator cohort.")
         sim = self.simulators[patient_id]
         
-        # Advance 1-second cardiorespiratory state so every 1s request has fresh organic pulse
         now = datetime.now()
-        sim._step_1second(now)
+        # If 1s buffer is out of sync with real-time clock by > 5 seconds, clear and re-seed
+        if sim.hr_1s_buffer:
+            try:
+                last_dt_str = sim.hr_1s_buffer[-1]["timestamp"]
+                last_dt = datetime.strptime(last_dt_str, "%Y-%m-%d %H:%M:%S")
+                if abs((now - last_dt).total_seconds()) > 5:
+                    sim.hr_1s_buffer.clear()
+            except Exception:
+                sim.hr_1s_buffer.clear()
 
-        buf = list(sim.hr_1s_buffer)
-        if len(buf) < seconds:
-            # Seed buffer up to requested seconds if fresh
-            needed = seconds - len(buf)
+        # Advance 1-second cardiorespiratory state so every 1s request has fresh organic pulse
+        if len(sim.hr_1s_buffer) < seconds:
+            needed = seconds - len(sim.hr_1s_buffer)
             for s in range(needed, 0, -1):
                 past_t = now - timedelta(seconds=s)
                 sim._step_1second(past_t)
-            buf = list(sim.hr_1s_buffer)
-        return buf[-seconds:]
+
+        sim._step_1second(now)
+        return list(sim.hr_1s_buffer)[-seconds:]
 
     def tick_patient(self, patient_id: str, carbs_g: float = 0.0, bolus_u: float = 0.0, walk_min: float = 0.0) -> dict:
         """Advances a specific patient by 15 seconds and appends the tick to the CSV stream."""
         if patient_id not in self.simulators:
             raise KeyError(f"Patient {patient_id} not found in simulator cohort.")
 
+        # Ensure baseline is aligned with live clock before stepping
+        self.ensure_patient_aligned(patient_id)
+
         sim = self.simulators[patient_id]
+        now = datetime.now()
+        aligned_sec = (now.second // 15) * 15
+        target_now = now.replace(second=aligned_sec, microsecond=0)
+
         if sim.last_timestamp:
             next_dt = sim.last_timestamp + timedelta(seconds=15)
+            if target_now > next_dt:
+                next_dt = target_now
         else:
-            next_dt = datetime.now()
+            next_dt = target_now
 
         record = sim.step(next_dt, carbs_g=carbs_g, bolus_u=bolus_u, walk_min=walk_min)
 

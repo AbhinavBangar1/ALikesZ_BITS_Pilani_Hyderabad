@@ -21,8 +21,10 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.append(str(ROOT / "src" / "02_twin_engine"))
 sys.path.append(str(ROOT / "src" / "01_simulator"))
+sys.path.append(str(ROOT / "src" / "03_api"))
 from twin_core import DigitalTwinEngine
 from wearable_stream_generator import CohortLiveStreamManager
+from analytics import compute_patient_analytics
 
 app = FastAPI(
     title="Type 1 Diabetes Digital Twin Platform API",
@@ -76,6 +78,8 @@ class TickRequest(BaseModel):
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def get_patient_stream(patient_id: str, limit: int = 60) -> pd.DataFrame:
+    if live_manager:
+        live_manager.ensure_patient_aligned(patient_id)
     stream_path = STREAM_DIR / f"{patient_id}_stream.csv"
     if not stream_path.exists():
         raise HTTPException(status_code=404, detail=f"No wearable stream found for patient {patient_id}")
@@ -83,20 +87,37 @@ def get_patient_stream(patient_id: str, limit: int = 60) -> pd.DataFrame:
     return df.tail(limit)
 
 
-def get_resampled_patient_stream(patient_id: str, num_5min_steps: int = 24) -> pd.DataFrame:
+def get_resampled_patient_stream(patient_id: str, num_5min_steps: int = 72) -> pd.DataFrame:
     """
-    Downsamples the 15-second high-frequency stream to 5-minute ticks (every 20th row)
-    so the 2-hour clinical horizon matches Model 1 and Model 2 expectations.
+    Downsamples the 15-second high-frequency stream to 5-minute ticks (20 rows per chunk)
+    so the clinical horizon chart matches multi-hour physiological patterns, meal pins, and steps.
     """
+    if live_manager:
+        live_manager.ensure_patient_aligned(patient_id)
     stream_path = STREAM_DIR / f"{patient_id}_stream.csv"
     if not stream_path.exists():
         raise HTTPException(status_code=404, detail=f"No wearable stream found for patient {patient_id}")
-    needed_rows = num_5min_steps * 20 + 20
+    needed_rows = num_5min_steps * 20 + 40
     df = pd.read_csv(stream_path).tail(needed_rows)
     if len(df) < num_5min_steps:
         return df
-    # Sample every 20th row backwards from the latest reading
-    df_5m = df.iloc[::-20].iloc[::-1].tail(num_5min_steps).reset_index(drop=True)
+
+    # Aggregate in 20-row (5-minute) chunks
+    records = []
+    chunk_size = 20
+    for i in range(0, len(df), chunk_size):
+        chunk = df.iloc[i : i + chunk_size]
+        if len(chunk) == 0:
+            continue
+        last_row = chunk.iloc[-1].to_dict()
+        last_row["steps"] = int(chunk["steps"].sum())
+        last_row["carb_input"] = round(float(chunk["carb_input"].sum()), 1)
+        last_row["bolus_volume_delivered"] = round(float(chunk["bolus_volume_delivered"].sum()), 1)
+        last_row["glucose"] = round(float(chunk["glucose"].iloc[-1]), 1)
+        last_row["heart_rate"] = int(round(chunk["heart_rate"].mean()))
+        records.append(last_row)
+
+    df_5m = pd.DataFrame(records).tail(num_5min_steps).reset_index(drop=True)
     return df_5m
 
 
@@ -214,12 +235,15 @@ def dismiss_cdss_alert(patient_id: str, request: CDSSActionRequest):
 
 
 @app.get("/api/patient/{patient_id}/stream")
-def get_stream(patient_id: str, points: int = 36):
+def get_stream(patient_id: str, points: int = 72, resample: bool = True):
     """
     Returns recent 5-minute ticks (CGM, HR, Steps, Insulin, Carbs)
     for rendering the live multi-modal chart on the dashboard.
     """
-    df = get_patient_stream(patient_id, limit=points)
+    if resample:
+        df = get_resampled_patient_stream(patient_id, num_5min_steps=points)
+    else:
+        df = get_patient_stream(patient_id, limit=points)
     return {
         "patient_id": patient_id,
         "count": len(df),
@@ -256,6 +280,25 @@ def get_twin_forecast(patient_id: str):
     stream_df = get_resampled_patient_stream(patient_id, num_5min_steps=24)
     state = twin_engine.predict_state(patient_id, stream_df)
     return state
+
+
+@app.get("/api/patient/{patient_id}/analytics")
+def get_patient_analytics(patient_id: str):
+    """
+    Computes comprehensive clinical metrics for the Doctor Dashboard redesign:
+    1. 14-day / stream Glycaemic summary (TIR, TBR, TAR, CV, Std)
+    2. Ambulatory Glucose Profile (AGP) 24h modal percentiles (p05, p25, p50, p75, p95)
+    3. Post-prandial meal responses (pre-meal, peak, rise, time to peak, recovery)
+    4. Real-time Hero KPIs (ROC, HR state, Steps last hour, IOB / Last meal)
+    5. Digital Twin model validation metrics
+    """
+    if not twin_engine or patient_id not in twin_engine.patients:
+        raise HTTPException(status_code=404, detail="Patient profile not found.")
+    try:
+        data = compute_patient_analytics(patient_id)
+        return data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to compute analytics: {str(e)}")
 
 
 @app.post("/api/patient/{patient_id}/simulate-what-if")
