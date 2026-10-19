@@ -50,13 +50,15 @@ export default function PatientProfileCard({
 
   return (
     <div className="w-full h-full p-6 pb-0 bg-white hover:bg-slate-50/30 transition-colors duration-200 flex flex-col justify-between select-none rounded-none">
-      {/* 1. Patient Name Headline in Editorial Serif with Demographic Details */}
+      {/* 1. Patient Name Headline in Unified Sans with Demographic Details */}
       <div className="flex items-start justify-between">
         <div>
-          <h1 className="font-editorial text-3xl font-normal text-slate-900 tracking-tight">
+          {/* OLD: <h1 className="font-editorial text-3xl font-normal text-slate-900 tracking-tight"> */}
+          <h1 className="font-sans text-2xl font-bold text-slate-900 tracking-tight">
             {ehr?.name || "Aarav Sharma"}
           </h1>
-          <div className="mt-1 flex items-center gap-2 text-xs font-mono-tech text-slate-500">
+          {/* OLD: <div className="mt-1 flex items-center gap-2 text-xs font-mono-tech text-slate-500"> */}
+          <div className="mt-1 flex items-center gap-2 text-xs font-sans text-slate-500">
             <span>{ehr?.age || 28} yrs</span>
             <span>·</span>
             <span>{ehr?.gender || "Male"}</span>
@@ -67,10 +69,12 @@ export default function PatientProfileCard({
           </div>
         </div>
         <div className="flex flex-col items-end gap-1">
-          <span className="text-[11px] font-mono-tech uppercase tracking-wider px-2 py-0.5 border border-slate-300 text-slate-800 bg-slate-50">
+          {/* OLD: <span className="text-[11px] font-mono-tech uppercase tracking-wider px-2 py-0.5 border border-slate-300 text-slate-800 bg-slate-50"> */}
+          <span className="text-[11px] font-sans font-semibold uppercase tracking-wider px-2 py-0.5 border border-slate-300 text-slate-800 bg-slate-50">
             {isT2D ? "Type 2 Cohort" : "Type 1 Cohort"}
           </span>
-          <span className="text-[10px] font-mono-tech text-slate-400">
+          {/* OLD: <span className="text-[10px] font-mono-tech text-slate-400"> */}
+          <span className="text-[10px] font-sans text-slate-400">
             {ehr?.cgm_device || "Dexcom G7"}
           </span>
         </div>
@@ -85,7 +89,8 @@ export default function PatientProfileCard({
               <span className="text-[13px] font-medium text-slate-900 block leading-tight">
                 HOMA-IR
               </span>
-              <span className="text-[15px] font-semibold font-mono-tech text-slate-900 mt-1 block leading-tight">
+              {/* OLD: <span className="text-[15px] font-semibold font-mono-tech text-slate-900 mt-1 block leading-tight"> */}
+              <span className="text-[15px] font-semibold font-sans text-slate-900 mt-1 block leading-tight">
                 {ehr?.homa_ir ? `${ehr.homa_ir} IR` : "3.8 IR"}
               </span>
             </div>
@@ -95,7 +100,8 @@ export default function PatientProfileCard({
               <span className="text-[13px] font-medium text-slate-900 block leading-tight">
                 Target TIR
               </span>
-              <span className="text-[15px] font-semibold font-mono-tech text-slate-900 mt-1 block leading-tight">
+              {/* OLD: <span className="text-[15px] font-semibold font-mono-tech text-slate-900 mt-1 block leading-tight"> */}
+              <span className="text-[15px] font-semibold font-sans text-slate-900 mt-1 block leading-tight">
                 &gt; {ehr?.target_tir_pct || 70}%
               </span>
             </div>
@@ -108,7 +114,8 @@ export default function PatientProfileCard({
               <span className="text-[13px] font-medium text-slate-900 block leading-tight">
                 Therapy
               </span>
-              <span className="text-[13px] font-semibold font-mono-tech text-slate-900 mt-1 block leading-tight truncate max-w-[125px]">
+              {/* OLD: <span className="text-[13px] font-semibold font-mono-tech text-slate-900 mt-1 block leading-tight truncate max-w-[125px]"> */}
+              <span className="text-[13px] font-semibold font-sans text-slate-900 mt-1 block leading-tight truncate max-w-[125px]">
                 {ehr?.oral_medications ? ehr.oral_medications.split("+")[0].trim() : "Metformin"}
               </span>
             </div>
@@ -120,7 +127,8 @@ export default function PatientProfileCard({
               <span className="text-[13px] font-medium text-slate-900 block leading-tight">
                 ISF
               </span>
-              <span className="text-[15px] font-semibold font-mono-tech text-slate-900 mt-1 block leading-tight">
+              {/* OLD: <span className="text-[15px] font-semibold font-mono-tech text-slate-900 mt-1 block leading-tight"> */}
+              <span className="text-[15px] font-semibold font-sans text-slate-900 mt-1 block leading-tight">
                 {ehr?.isf_mg_dl_per_unit || 60} mg/dL/U
               </span>
             </div>
@@ -130,7 +138,8 @@ export default function PatientProfileCard({
               <span className="text-[13px] font-medium text-slate-900 block leading-tight">
                 ICR
               </span>
-              <span className="text-[15px] font-semibold font-mono-tech text-slate-900 mt-1 block leading-tight">
+              {/* OLD: <span className="text-[15px] font-semibold font-mono-tech text-slate-900 mt-1 block leading-tight"> */}
+              <span className="text-[15px] font-semibold font-sans text-slate-900 mt-1 block leading-tight">
                 1:{ehr?.icr_grams_per_unit || 15} U/g
               </span>
             </div>
@@ -140,7 +149,8 @@ export default function PatientProfileCard({
               <span className="text-[13px] font-medium text-slate-900 block leading-tight">
                 Basal
               </span>
-              <span className="text-[15px] font-semibold font-mono-tech text-slate-900 mt-1 block leading-tight">
+              {/* OLD: <span className="text-[15px] font-semibold font-mono-tech text-slate-900 mt-1 block leading-tight"> */}
+              <span className="text-[15px] font-semibold font-sans text-slate-900 mt-1 block leading-tight">
                 {ehr?.basal_rate_u_hr || 0.65} U/h
               </span>
             </div>
@@ -152,7 +162,8 @@ export default function PatientProfileCard({
           <span className="text-[13px] font-medium text-slate-900 block leading-tight">
             HbA1c
           </span>
-          <span className="text-[15px] font-semibold font-mono-tech text-slate-900 mt-1 block leading-tight">
+          {/* OLD: <span className="text-[15px] font-semibold font-mono-tech text-slate-900 mt-1 block leading-tight"> */}
+          <span className="text-[15px] font-semibold font-sans text-slate-900 mt-1 block leading-tight">
             {ehr?.hba1c_pct || 7.8}%
           </span>
         </div>
@@ -162,7 +173,8 @@ export default function PatientProfileCard({
           <span className="text-[13px] font-medium text-slate-900 block leading-tight">
             BMI
           </span>
-          <span className="text-[15px] font-semibold font-mono-tech text-slate-900 mt-1 block leading-tight">
+          {/* OLD: <span className="text-[15px] font-semibold font-mono-tech text-slate-900 mt-1 block leading-tight"> */}
+          <span className="text-[15px] font-semibold font-sans text-slate-900 mt-1 block leading-tight">
             {ehr?.bmi || 24.1}
           </span>
         </div>
@@ -172,68 +184,74 @@ export default function PatientProfileCard({
           <span className="text-[13px] font-medium text-slate-900 block leading-tight">
             Diagnosed
           </span>
-          <span className="text-[15px] font-semibold font-mono-tech text-slate-900 mt-1 block leading-tight">
+          {/* OLD: <span className="text-[15px] font-semibold font-mono-tech text-slate-900 mt-1 block leading-tight"> */}
+          <span className="text-[15px] font-semibold font-sans text-slate-900 mt-1 block leading-tight">
             {ehr?.years_with_diabetes || ehr?.years_with_t1d || 14} yrs
           </span>
         </div>
       </div>
 
-      {/* 3. Below Layer: 3 Biosignals (Full Space of Parent Width, Invisible Borders, Clean Contrast) */}
-      <div className="-mx-6 mt-6 grid grid-cols-3 gap-0 border-t border-transparent bg-slate-50/30">
+      {/* 3. Below Layer: 3 Biosignals (Restrained Confident Palette, Unified Sans, Plain Labels) */}
+      <div className="-mx-6 mt-6 grid grid-cols-3 gap-0 border-t border-slate-100 bg-slate-50/40">
         {/* Col 1: CURRENT CGM */}
-        <div className="py-4 px-2 rounded-none hover:bg-slate-100 transition-colors duration-150 cursor-pointer flex flex-col items-center justify-center text-center">
+        <div className="py-4 px-2 rounded-none hover:bg-slate-100/70 transition-colors duration-150 cursor-pointer flex flex-col items-center justify-center text-center">
           <div className="flex items-baseline space-x-1 justify-center">
-            <span className="text-[38px] font-semibold text-slate-900 leading-none tracking-tight font-sans">
+            <span className="text-[38px] font-bold text-slate-900 leading-none tracking-tight font-sans">
               {cgmVal}
             </span>
-            <span className="text-sm font-semibold text-slate-900 leading-none font-sans">
+            <span className="text-sm font-semibold text-slate-600 leading-none font-sans">
               mg/dL
             </span>
           </div>
           <div className="flex items-center gap-1.5 mt-2">
-            <span
-              className={`w-1.5 h-1.5 rounded-none ${
-                cgmVal < 70 ? "bg-rose-600" : cgmVal > 180 ? "bg-amber-600" : "bg-emerald-600"
-              }`}
-            />
-            <span className="text-[11px] font-mono-tech uppercase tracking-wider text-slate-600">
-              CURRENT CGM
+            {/* OLD RAINBOW DOT:
+            <span className={`w-1.5 h-1.5 rounded-none ${cgmVal < 70 ? "bg-rose-600" : cgmVal > 180 ? "bg-amber-600" : "bg-emerald-600"}`} />
+            <span className="text-[11px] font-mono-tech uppercase tracking-wider text-slate-600">CURRENT CGM</span>
+            */}
+            <span className="text-[11px] font-sans font-semibold uppercase tracking-wider text-slate-500">
+              Current Glucose
             </span>
           </div>
         </div>
 
         {/* Col 2: HEART RATE */}
-        <div className="py-4 px-2 rounded-none hover:bg-slate-100 transition-colors duration-150 cursor-pointer flex flex-col items-center justify-center text-center">
+        <div className="py-4 px-2 rounded-none hover:bg-slate-100/70 transition-colors duration-150 cursor-pointer flex flex-col items-center justify-center text-center">
           <div className="flex items-baseline space-x-1 justify-center">
-            <span className="text-[38px] font-semibold text-slate-900 leading-none tracking-tight font-sans">
+            <span className="text-[38px] font-bold text-slate-900 leading-none tracking-tight font-sans">
               {hrVal}
             </span>
-            <span className="text-sm font-semibold text-slate-900 leading-none font-sans">
+            <span className="text-sm font-semibold text-slate-600 leading-none font-sans">
               BPM
             </span>
           </div>
           <div className="flex items-center gap-1.5 mt-2">
+            {/* OLD RED DOT:
             <span className="w-1.5 h-1.5 rounded-none bg-red-600" />
-            <span className="text-[11px] font-mono-tech uppercase tracking-wider text-slate-600">
-              HEART RATE
+            <span className="text-[11px] font-mono-tech uppercase tracking-wider text-slate-600">HEART RATE</span>
+            */}
+            <span className="text-[11px] font-sans font-semibold uppercase tracking-wider text-slate-500">
+              Heart Rate
             </span>
           </div>
         </div>
 
-        {/* Col 3: ACTIVITY STEP COUNT */}
-        <div className="py-4 px-2 rounded-none hover:bg-slate-100 transition-colors duration-150 cursor-pointer flex flex-col items-center justify-center text-center">
+        {/* Col 3: ACTIVITY STEP COUNT (Plainer wording: 'Recent Steps' instead of 'WINDOW STEPS') */}
+        <div className="py-4 px-2 rounded-none hover:bg-slate-100/70 transition-colors duration-150 cursor-pointer flex flex-col items-center justify-center text-center">
           <div className="flex items-baseline space-x-1 justify-center">
-            <span className="text-[38px] font-semibold text-slate-900 leading-none tracking-tight font-sans">
+            <span className="text-[38px] font-bold text-slate-900 leading-none tracking-tight font-sans">
               {stepsVal}
             </span>
-            <span className="text-sm font-semibold text-slate-900 leading-none font-sans">
+            <span className="text-sm font-semibold text-slate-600 leading-none font-sans">
               steps
             </span>
           </div>
           <div className="flex items-center gap-1.5 mt-2">
+            {/* OLD PURPLE DOT & CRYPTIC 'WINDOW STEPS' LABEL:
             <span className="w-1.5 h-1.5 rounded-none bg-purple-600" />
-            <span className="text-[11px] font-mono-tech uppercase tracking-wider text-slate-600">
-              WINDOW STEPS
+            <span className="text-[11px] font-mono-tech uppercase tracking-wider text-slate-600">WINDOW STEPS</span>
+            */}
+            <span className="text-[11px] font-sans font-semibold uppercase tracking-wider text-slate-500">
+              Recent Steps
             </span>
           </div>
         </div>

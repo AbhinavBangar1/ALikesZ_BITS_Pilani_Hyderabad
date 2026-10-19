@@ -36,7 +36,6 @@ const PATIENT_TUTORIAL_STEPS: TutorialStep[] = [
     badge: "LIVE SENSOR",
     description:
       "Displays your active continuous glucose reading in mg/dL, directional trend velocity (e.g., STABLE, RISING), and recent 3-hour trajectory sparkline color-coded by clinical target zones (70–140 mg/dL).",
-    tip: "A blue bar indicates in-range; amber indicates hyperglycemia (>180); red indicates hypoglycemia danger (<70).",
   },
   {
     targetId: "tutorial-patient-forecast",
@@ -44,7 +43,6 @@ const PATIENT_TUTORIAL_STEPS: TutorialStep[] = [
     badge: "AI HORIZON",
     description:
       "Proactively projects where your blood sugar will be in +30 minutes and +60 minutes using physiological twin kinetics, giving you actionable foresight before symptoms or extreme excursions occur.",
-    tip: "If the 60m projection exceeds 140 mg/dL, the twin flags an upcoming excursion risk.",
   },
   {
     targetId: "tutorial-patient-simulator",
@@ -52,7 +50,6 @@ const PATIENT_TUTORIAL_STEPS: TutorialStep[] = [
     badge: "TWIN SIMULATION",
     description:
       "Simulate real-life choices before you make them: adjust Food Carbs (0–120g), Rapid Insulin Bolus (0–10U), and Post-Meal Walking (0–60 min). For Type 2 patients, test the impact of taking or missing oral medications.",
-    tip: "Notice how a 15-minute post-meal walk stimulates GLUT-4 muscle uptake and flattens glycemic spikes.",
   },
   {
     targetId: "tutorial-patient-chart",
@@ -60,7 +57,6 @@ const PATIENT_TUTORIAL_STEPS: TutorialStep[] = [
     badge: "PHYSIOLOGICAL TWIN",
     description:
       "Directly compares your Baseline trajectory (dashed gray line: if you make no changes) against your Simulated trajectory (solid blue line: incorporating your food, insulin, or exercise), forecasting your peak glucose level.",
-    tip: "The green background band highlights the 70–140 mg/dL safe clinical zone.",
   },
   {
     targetId: "tutorial-patient-diet",
@@ -68,7 +64,6 @@ const PATIENT_TUTORIAL_STEPS: TutorialStep[] = [
     badge: "NUTRITION PLANNER",
     description:
       "Easily plan authentic South Asian meals (Roti, Dal, Paneer, Rice, Dosa, Idli, Poha). Computes total carbs, protein, and fat, and provides one-click 'Apply to What-If' simulation to sync directly with your metabolic twin.",
-    tip: "Click '+ Roti' or '+ Dal' to watch your simulated postprandial curve update in real-time.",
   },
 ];
 
@@ -223,6 +218,23 @@ export default function PatientDashboard() {
     }
 
     loadPatient();
+
+    // Synchronize 15-second background refresh to wall-clock grid
+    let timer: NodeJS.Timeout | null = null;
+    let initialTimeout: NodeJS.Timeout | null = null;
+    const now = new Date();
+    const secMod = now.getSeconds() % 15;
+    const msUntilNext15s = (15 - secMod) * 1000 - now.getMilliseconds();
+
+    initialTimeout = setTimeout(() => {
+      loadPatient();
+      timer = setInterval(loadPatient, 15000);
+    }, Math.max(500, msUntilNext15s));
+
+    return () => {
+      if (initialTimeout) clearTimeout(initialTimeout);
+      if (timer) clearInterval(timer);
+    };
   }, [patientId]);
 
   // Run Simulation whenever inputs change
@@ -406,7 +418,7 @@ export default function PatientDashboard() {
               </div>
 
               {/* 3-Hour Sparkline Box */}
-              <div className="mt-4 border border-slate-200 p-3 bg-slate-50/50">
+              <div className="mt-4 border border-slate-300 p-3 bg-slate-50/50">
                 <div className="flex items-center justify-between text-[11px] font-mono-tech text-slate-500 mb-2">
                   <span>Recent 3-Hour Trajectory</span>
                   <span>Target: 70–140</span>
@@ -717,6 +729,17 @@ export default function PatientDashboard() {
                 >
                   Peak {Math.round(peakSimVal)} mg/dL @ +60m
                 </text>
+
+                {/* Boundary Surrounding Dual-Trajectory Graph */}
+                <rect
+                  x={pLeft}
+                  y={pTop}
+                  width={plotW}
+                  height={plotH}
+                  fill="none"
+                  stroke="#94A3B8"
+                  strokeWidth="1"
+                />
 
                 {/* X Axis Labels */}
                 <g transform={`translate(0, ${pTop + plotH + 18})`}>

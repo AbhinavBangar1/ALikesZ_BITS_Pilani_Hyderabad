@@ -61,14 +61,17 @@ export default function CDSSActionCard({
       {/* Header */}
       <div className="flex items-center justify-between pb-3 border-b border-slate-200">
         <div className="flex items-center gap-2">
-          <h2 className="font-editorial text-xl font-normal text-slate-900 tracking-tight">
+          {/* OLD: <h2 className="font-editorial text-xl font-normal text-slate-900 tracking-tight">Clinical Decision Support (CDSS)</h2> */}
+          <h2 className="font-sans text-lg font-bold text-slate-900 tracking-tight">
             Clinical Decision Support (CDSS)
           </h2>
-          <span className="text-[11px] font-mono-tech px-2 py-0.5 bg-slate-900 text-white">
+          {/* OLD: <span className="text-[11px] font-mono-tech px-2 py-0.5 bg-slate-900 text-white"> */}
+          <span className="text-[11px] font-sans font-semibold px-2 py-0.5 bg-slate-900 text-white">
             {activeAlerts.length} {activeAlerts.length === 1 ? "Alert" : "Alerts"}
           </span>
         </div>
-        <span className="text-[11px] font-mono-tech text-slate-500 uppercase tracking-wider">
+        {/* OLD: <span className="text-[11px] font-mono-tech text-slate-500 uppercase tracking-wider"> */}
+        <span className="text-[11px] font-sans font-semibold text-slate-500 uppercase tracking-wider">
           Automated Pattern Engine
         </span>
       </div>
@@ -77,10 +80,10 @@ export default function CDSSActionCard({
       <div className="flex-1 my-3 space-y-3 overflow-y-auto max-h-[190px] pr-1">
         {activeAlerts.length === 0 ? (
           <div className="h-full min-h-[100px] flex flex-col items-center justify-center text-center p-4 border border-dashed border-slate-200 bg-slate-50/50">
-            <span className="text-sm font-medium text-slate-700">
+            <span className="text-sm font-medium text-slate-700 font-sans">
               No Active Clinical Alerts
             </span>
-            <span className="text-[12px] text-slate-500 mt-1">
+            <span className="text-[12px] text-slate-500 mt-1 font-sans">
               Physiological continuous metrics nominal. No nocturnal hypoglycemia or exercise excursions detected.
             </span>
           </div>
@@ -96,20 +99,22 @@ export default function CDSSActionCard({
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="flex items-center gap-2">
+                  {/* OLD: <span className={`text-[10px] font-mono-tech uppercase font-semibold px-1.5 py-0.5 border ${getSeverityBadge(alert.severity)}`}> */}
                   <span
-                    className={`text-[10px] font-mono-tech uppercase font-semibold px-1.5 py-0.5 border ${getSeverityBadge(
+                    className={`text-[10px] font-sans uppercase font-bold px-1.5 py-0.5 border ${getSeverityBadge(
                       alert.severity
                     )}`}
                   >
                     {alert.severity}
                   </span>
-                  <span className="text-sm font-semibold text-slate-900">
+                  <span className="text-sm font-semibold text-slate-900 font-sans">
                     {alert.title}
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
                   {alert.status === "ACKNOWLEDGED" && (
-                    <span className="text-[10px] font-mono-tech uppercase tracking-wider text-emerald-700 font-semibold px-1.5 py-0.5 bg-emerald-50 border border-emerald-200">
+                    /* OLD: <span className="text-[10px] font-mono-tech uppercase tracking-wider text-emerald-700 font-semibold px-1.5 py-0.5 bg-emerald-50 border border-emerald-200"> */
+                    <span className="text-[10px] font-sans uppercase tracking-wider text-emerald-700 font-semibold px-1.5 py-0.5 bg-emerald-50 border border-emerald-200">
                       Acknowledged
                     </span>
                   )}

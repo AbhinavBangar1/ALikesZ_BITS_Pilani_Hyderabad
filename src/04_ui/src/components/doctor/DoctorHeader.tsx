@@ -61,11 +61,12 @@ export default function DoctorHeader({
   return (
     <header className="flex items-center justify-between px-6 py-3 bg-white border-b border-slate-200 select-none rounded-none">
       {/* Brand: Logo + 'Kiko' */}
-      <div className="flex items-center gap-3">
-        <div className="w-8 h-8 bg-slate-900 text-white flex items-center justify-center font-bold text-lg font-editorial rounded-none">
+      <div className="flex items-center gap-2.5">
+        <div className="w-7 h-7 bg-slate-900 text-white flex items-center justify-center font-bold text-sm font-sans rounded-xs">
           ∞
         </div>
-        <span className="font-editorial text-2xl font-normal tracking-tight text-slate-900">
+        {/* OLD: <span className="font-sans text-2xl font-bold tracking-tight text-slate-900"> */}
+        <span className="font-serif text-2xl font-normal tracking-tight text-slate-900">
           Kiko
         </span>
       </div>
@@ -73,12 +74,28 @@ export default function DoctorHeader({
       {/* Right: Unboxed Time & Date | Squared Profile Icon with Initials & Hover Logout */}
       <div className="flex items-center gap-4">
         {/* Time and date without the box */}
-        <span className="font-mono-tech text-xs text-slate-500 font-medium tracking-tight">
+        {/* OLD: <span className="font-mono-tech text-xs text-slate-500 font-medium tracking-tight"> */}
+        <span className="font-sans text-xs text-slate-500 font-medium tracking-tight">
           {timeStr || "Sun, 18 Oct 2026 · 21:57:17"}
         </span>
 
         {/* Separator */}
         <span className="text-slate-300">|</span>
+
+        {/* Quick Tour Button */}
+        {onOpenTutorial && (
+          <button
+            type="button"
+            onClick={onOpenTutorial}
+            className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-sans text-slate-700 hover:text-slate-900 bg-slate-50 hover:bg-slate-100 border border-slate-300 transition-colors cursor-pointer select-none"
+            title="Start Guided Clinical Dashboard Tour (8 Steps)"
+          >
+            <span className="w-3.5 h-3.5 rounded-full border border-slate-500 text-[9px] flex items-center justify-center font-bold">
+              ?
+            </span>
+            <span className="font-medium">Tour</span>
+          </button>
+        )}
 
         {/* Squared profile icon with initials only ('KR') + Hover dropdown */}
         <div
@@ -86,9 +103,10 @@ export default function DoctorHeader({
           onMouseEnter={() => setDropdownOpen(true)}
           onMouseLeave={() => setDropdownOpen(false)}
         >
+          {/* OLD: className="w-8 h-8 bg-slate-900 text-white flex items-center justify-center font-mono-tech text-xs font-semibold rounded-none hover:bg-slate-800 transition-colors cursor-pointer select-none border border-slate-900 focus:outline-none" */}
           <button
             type="button"
-            className="w-8 h-8 bg-slate-900 text-white flex items-center justify-center font-mono-tech text-xs font-semibold rounded-none hover:bg-slate-800 transition-colors cursor-pointer select-none border border-slate-900 focus:outline-none"
+            className="w-8 h-8 bg-slate-900 text-white flex items-center justify-center font-sans text-xs font-semibold rounded-none hover:bg-slate-800 transition-colors cursor-pointer select-none border border-slate-900 focus:outline-none"
             aria-label="Clinician Profile Menu"
           >
             KR
@@ -101,14 +119,16 @@ export default function DoctorHeader({
                 {/* Clinician Details */}
                 <div className="px-4 py-2 border-b border-slate-100">
                   <div className="flex items-center gap-2">
-                    <div className="w-6 h-6 bg-slate-900 text-white flex items-center justify-center font-mono-tech text-[10px] font-semibold rounded-none">
+                    {/* OLD: <div className="w-6 h-6 bg-slate-900 text-white flex items-center justify-center font-mono-tech text-[10px] font-semibold rounded-none"> */}
+                    <div className="w-6 h-6 bg-slate-900 text-white flex items-center justify-center font-sans text-[10px] font-semibold rounded-none">
                       KR
                     </div>
                     <div>
                       <p className="font-semibold text-slate-900 leading-tight">
                         Dr. Kavya Reddy, MD
                       </p>
-                      <p className="text-[11px] font-mono-tech text-slate-500 mt-0.5">
+                      {/* OLD: <p className="text-[11px] font-mono-tech text-slate-500 mt-0.5"> */}
+                      <p className="text-[11px] font-sans text-slate-500 mt-0.5">
                         Senior Endocrinologist
                       </p>
                     </div>
@@ -147,8 +167,9 @@ export default function DoctorHeader({
                         </span>
                         <span>Dashboard Tour</span>
                       </span>
+                      {/* PREVIOUS: <span className="font-mono-tech text-[10px] text-blue-600 font-semibold uppercase">6 Steps</span> */}
                       <span className="font-mono-tech text-[10px] text-blue-600 font-semibold uppercase">
-                        6 Steps
+                        8 Steps
                       </span>
                     </button>
                   </div>

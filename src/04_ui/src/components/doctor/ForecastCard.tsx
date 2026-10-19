@@ -91,10 +91,12 @@ export default function ForecastCard({ forecast, stream }: ForecastCardProps) {
     <div className="w-full h-full p-6 bg-white hover:bg-slate-50/30 transition-colors duration-200 flex flex-col justify-between select-none rounded-none">
       {/* Title & Dynamic Status Badge */}
       <div className="flex items-center justify-between">
-        <h2 className="font-editorial text-xl font-normal text-slate-900 tracking-tight">
+        {/* OLD: <h2 className="font-editorial text-xl font-normal text-slate-900 tracking-tight">2-Hour Predictive Trajectory</h2> */}
+        <h2 className="font-sans text-lg font-bold text-slate-900 tracking-tight">
           2-Hour Predictive Trajectory
         </h2>
-        <span className={`text-[11px] font-mono-tech px-2 py-0.5 border ${statusBg}`}>
+        {/* OLD: <span className={`text-[11px] font-mono-tech px-2 py-0.5 border ${statusBg}`}> */}
+        <span className={`text-[11px] font-sans font-semibold uppercase tracking-wider px-2 py-0.5 border ${statusBg}`}>
           {statusText}
         </span>
       </div>
@@ -137,8 +139,8 @@ export default function ForecastCard({ forecast, stream }: ForecastCardProps) {
             opacity="0.4"
           />
 
-          {/* Y Axis Guide Lines & Labels (300, 250, 180, 140, 70) */}
-          {(maxY > 350 ? [maxY, 300, 250, 180, 140, 70] : [300, 250, 180, 140, 70]).map((val) => {
+          {/* Y Axis Guide Lines & Labels (300, 200, 100) */}
+          {[300, 200, 100].map((val) => {
             const y = getY(val);
             return (
               <g key={val}>
@@ -150,11 +152,12 @@ export default function ForecastCard({ forecast, stream }: ForecastCardProps) {
                   stroke="#F1F5F9"
                   strokeWidth="1"
                 />
+                {/* OLD: <text x={padLeft - 8} y={y + 3.5} textAnchor="end" className="text-[10px] font-mono-tech fill-slate-500 font-medium"> */}
                 <text
                   x={padLeft - 8}
                   y={y + 3.5}
                   textAnchor="end"
-                  className="text-[10px] font-mono-tech fill-slate-500 font-medium"
+                  className="text-[10px] font-sans fill-slate-500 font-medium"
                 >
                   {val}
                 </text>
@@ -255,11 +258,12 @@ export default function ForecastCard({ forecast, stream }: ForecastCardProps) {
           />
 
           {/* Value Labels Above Dots */}
+          {/* OLD: className="text-[11px] font-mono-tech font-semibold fill-..." */}
           <text
             x={xNow}
             y={yNow - 9}
             textAnchor="middle"
-            className="text-[11px] font-mono-tech font-semibold fill-slate-900"
+            className="text-[11px] font-sans font-bold fill-slate-900"
           >
             {Math.round(currG)}
           </text>
@@ -267,7 +271,7 @@ export default function ForecastCard({ forecast, stream }: ForecastCardProps) {
             x={x30}
             y={y30 - 9}
             textAnchor="middle"
-            className="text-[11px] font-mono-tech font-semibold fill-blue-700"
+            className="text-[11px] font-sans font-bold fill-blue-700"
           >
             {Math.round(val30)}
           </text>
@@ -275,7 +279,7 @@ export default function ForecastCard({ forecast, stream }: ForecastCardProps) {
             x={x60}
             y={y60 - 9}
             textAnchor="middle"
-            className="text-[11px] font-mono-tech font-semibold fill-blue-700"
+            className="text-[11px] font-sans font-bold fill-blue-700"
           >
             {Math.round(val60)}
           </text>
@@ -283,10 +287,21 @@ export default function ForecastCard({ forecast, stream }: ForecastCardProps) {
             x={x120}
             y={y120 - 9}
             textAnchor="end"
-            className="text-[11px] font-mono-tech font-semibold fill-blue-700"
+            className="text-[11px] font-sans font-bold fill-blue-700"
           >
             {Math.round(val120)}
           </text>
+
+          {/* Boundary Surrounding Trajectory Graph */}
+          <rect
+            x={padLeft}
+            y={padTop}
+            width={plotWidth}
+            height={plotHeight}
+            fill="none"
+            stroke="#94A3B8"
+            strokeWidth="1"
+          />
 
           {/* Bottom X Axis Labels */}
           <g transform={`translate(0, ${padTop + plotHeight + 18})`}>
