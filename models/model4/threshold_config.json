@@ -1,0 +1,34 @@
+{
+  "optimal_threshold": 0.7302,
+  "default_threshold": 0.5,
+  "tier2_120min_proactive_alert": {
+    "validation_auroc": 0.9226,
+    "test_auroc": 0.947,
+    "optimal_threshold": 0.7302,
+    "test_f1": 0.6292,
+    "test_precision": 0.5272,
+    "test_recall": 0.7802,
+    "test_specificity": 0.9479,
+    "confusion": {
+      "tp": 4099,
+      "fp": 3676,
+      "tn": 66887,
+      "fn": 1155
+    }
+  },
+  "tier1_30min_urgent_alert": {
+    "validation_auroc": 0.9848,
+    "test_auroc": 0.9917,
+    "optimal_threshold": 0.8088,
+    "test_f1": 0.7052,
+    "test_precision": 0.5722,
+    "test_recall": 0.9189,
+    "test_specificity": 0.9683,
+    "confusion": {
+      "tp": 3072,
+      "fp": 2297,
+      "tn": 70177,
+      "fn": 271
+    }
+  }
+}

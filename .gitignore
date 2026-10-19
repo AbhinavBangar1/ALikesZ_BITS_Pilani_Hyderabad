@@ -1,7 +1,20 @@
 data/
 data-T1DM/
+data-T2DM/
 *.pdf
 *.png
 *.jpg
+*.zip
 
 reports/
+__pycache__/
+*.pyc
+catboost_info/
+models_backup_v1/
+sharpic-ManchesterCSCoordinatedDiabetesStudy-ea52718/
+
+# Documentation and scratch verification scripts
+MR_DESCRIPTION.md
+test_routing_verification.py
+strict_truth_audit.py
+compare_models.py

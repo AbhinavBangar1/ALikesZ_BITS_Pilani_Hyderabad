@@ -14,9 +14,10 @@ Outputs:
   - reports/submission_benchmark_metrics.json
 """
 
+import sys
+from pathlib import Path
 import json
 import pickle
-from pathlib import Path
 import numpy as np
 import pandas as pd
 from sklearn.metrics import (
@@ -26,9 +27,16 @@ from sklearn.metrics import (
     average_precision_score,
     confusion_matrix,
     f1_score,
+    precision_score,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from delta_forecaster import DeltaForecaster
+from ensemble_classifier import EnsembleClassifier
+
 MODELS_DIR = ROOT / "models"
 DATA_DIR = ROOT / "data" / "processed"
 REPORTS_DIR = ROOT / "reports"
@@ -154,12 +162,20 @@ def evaluate_model2():
     X = valid_df[feature_cols]
     y_true = valid_df["label"].values.astype(int)
 
+    thresh_config_file = MODELS_DIR / "model2" / "threshold_config.json"
+    opt_threshold = 0.2414
+    if thresh_config_file.exists():
+        with open(thresh_config_file, "r") as f:
+            cfg = json.load(f)
+            opt_threshold = cfg.get("optimal_threshold", opt_threshold)
+
     y_prob = model.predict_proba(X)[:, 1]
-    y_pred = (y_prob >= 0.5).astype(int)
+    y_pred = (y_prob >= opt_threshold).astype(int)
 
     auroc = float(roc_auc_score(y_true, y_prob))
     avg_prec = float(average_precision_score(y_true, y_prob))
     f1 = float(f1_score(y_true, y_pred, zero_division=0))
+    prec = float(precision_score(y_true, y_pred, zero_division=0))
 
     tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
     sensitivity = float(tp / (tp + fn)) if (tp + fn) > 0 else 0.0
@@ -169,13 +185,15 @@ def evaluate_model2():
         "auroc": round(auroc, 4),
         "average_precision": round(avg_prec, 4),
         "f1_score": round(f1, 4),
+        "precision": round(prec, 4),
         "sensitivity_recall": round(sensitivity, 4),
         "specificity": round(specificity, 4),
+        "optimal_decision_threshold": opt_threshold,
         "evaluated_samples": len(valid_df),
         "positive_events": int(tp + fn)
     }
 
-    print(f"AUROC: {auroc:.4f} | Avg Precision: {avg_prec:.4f} | F1: {f1:.4f} | Sensitivity: {sensitivity:.2%} | Specificity: {specificity:.2%}")
+    print(f"AUROC: {auroc:.4f} | Avg Precision: {avg_prec:.4f} | F1: {f1:.4f} | Precision: {prec:.4f} | Sensitivity: {sensitivity:.2%} | Specificity: {specificity:.2%}")
 
     return results
 

@@ -185,17 +185,69 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
         grp["glucose_roll_mean_60"] = grp["glucose"].rolling(12).mean()
         grp["glucose_roll_std_60"]  = grp["glucose"].rolling(12).std()
 
-        # ── Glucose rate of change (delta per 5 min)
+        # ── Glucose rate of change (delta per 5 min) and acceleration
         grp["glucose_roc"] = grp["glucose"].diff()
+        grp["glucose_accel"] = grp["glucose_roc"].diff()
+        grp["glucose_roc_15m"] = grp["glucose"] - grp["glucose"].shift(3)
+        grp["glucose_roc_30m"] = grp["glucose"] - grp["glucose"].shift(6)
+        grp["glucose_roc_60m"] = grp["glucose"] - grp["glucose"].shift(12)
+
+        # ── Rolling extremes
+        grp["glucose_roll_min_30"] = grp["glucose"].rolling(6).min()
+        grp["glucose_roll_max_30"] = grp["glucose"].rolling(6).max()
+        grp["glucose_roll_range_30"] = grp["glucose_roll_max_30"] - grp["glucose_roll_min_30"]
+        grp["glucose_roll_min_60"] = grp["glucose"].rolling(12).min()
+        grp["glucose_roll_max_60"] = grp["glucose"].rolling(12).max()
+        grp["glucose_roll_range_60"] = grp["glucose_roll_max_60"] - grp["glucose_roll_min_60"]
+
+        # ── Exponential Moving Averages (EMA)
+        grp["glucose_ema_15"] = grp["glucose"].ewm(span=3, adjust=False).mean()
+        grp["glucose_ema_30"] = grp["glucose"].ewm(span=6, adjust=False).mean()
+        grp["glucose_ema_60"] = grp["glucose"].ewm(span=12, adjust=False).mean()
+        grp["glucose_diff_ema_15"] = grp["glucose"] - grp["glucose_ema_15"]
+        grp["glucose_diff_ema_60"] = grp["glucose"] - grp["glucose_ema_60"]
+
+        # ── Estimated Insulin on Board (IOB) & Carbs on Board (COB) decay
+        iob_decay = np.exp(-np.arange(LOOKBACK + 1) / 12.0)
+        cob_decay = np.exp(-np.arange(LOOKBACK + 1) / 8.0)
+
+        bolus_series = grp["bolus_volume_delivered"].fillna(0) if "bolus_volume_delivered" in grp.columns else pd.Series(0, index=grp.index)
+        carb_series  = grp["carb_input"].fillna(0) if "carb_input" in grp.columns else pd.Series(0, index=grp.index)
+
+        iob_vals = np.zeros(len(grp))
+        cob_vals = np.zeros(len(grp))
+        b_arr = bolus_series.values
+        c_arr = carb_series.values
+        for idx in range(LOOKBACK, len(grp)):
+            iob_vals[idx] = np.sum(b_arr[idx - LOOKBACK: idx + 1][::-1] * iob_decay)
+            cob_vals[idx] = np.sum(c_arr[idx - LOOKBACK: idx + 1][::-1] * cob_decay)
+        grp["iob_est"] = iob_vals
+        grp["cob_est"] = cob_vals
+
+        # ── Kovatchev Low / High Blood Glucose Risk Indices (LBGI & HBGI)
+        clipped_g = np.clip(grp["glucose"].values, 10.0, 600.0)
+        f_g = 1.509 * (np.log(clipped_g) ** 1.084 - 5.381)
+        risk = 10.0 * (f_g ** 2)
+        grp["lbgi"] = np.where(f_g < 0, risk, 0.0)
+        grp["hbgi"] = np.where(f_g > 0, risk, 0.0)
+
+        # ── Glycemic volatility ratios
+        grp["tbr_30_pct"] = (grp["glucose"].rolling(6).apply(lambda x: (x < 70).mean() * 100.0, raw=True)).fillna(0)
+        grp["tar_30_pct"] = (grp["glucose"].rolling(6).apply(lambda x: (x > 180).mean() * 100.0, raw=True)).fillna(0)
+
+        # ── Patient-Specific Baseline Ratio (current glucose / historical lookback mean)
+        hist_mean = grp["glucose"].rolling(LOOKBACK).mean()
+        grp["glucose_to_baseline_ratio"] = (grp["glucose"] / hist_mean.replace(0, np.nan)).fillna(1.0)
 
         # ── Time-of-day cyclical encoding
         grp["hour"] = grp["timestamp"].dt.hour + grp["timestamp"].dt.minute / 60
         grp["hour_sin"] = np.sin(2 * np.pi * grp["hour"] / 24)
         grp["hour_cos"] = np.cos(2 * np.pi * grp["hour"] / 24)
 
-        # ── Targets
+        # ── Targets (Absolute & Delta)
         for label, steps in HORIZONS.items():
             grp[f"target_{label}"] = grp["glucose"].shift(-steps)
+            grp[f"delta_{label}"] = grp[f"target_{label}"] - grp["glucose"]
 
         # ── Drop rows with NaN in targets or insufficient lookback
         grp = grp.dropna(subset=[f"target_{k}" for k in HORIZONS])
