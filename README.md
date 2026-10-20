@@ -1,8 +1,8 @@
 # Kiko — Predictive Physiological Digital Twin for Personalized Glycemic Trajectory Simulation
 
-**Digital Twin Challenge 2026 | Research and Competition Proof of Concept**
-**Project Title:** Kiko: Multimodal Predictive Physiological Digital Twin for Personalized Glycemic Trajectory Simulation and Adverse-Event Forecasting in Type 1 and Type 2 Diabetes
-**Team:** ALikesZ
+**Digital Twin Challenge 2026 | Research and Competition Proof of Concept**  
+**Project Title:** Kiko: Multimodal Predictive Physiological Digital Twin for Personalized Glycemic Trajectory Simulation and Adverse-Event Forecasting in Type 1 and Type 2 Diabetes  
+**Team:** ALikesZ  
 **Institution:** Birla Institute of Technology & Science, Pilani – Hyderabad Campus ,Hyderabad ,Telangana, India
 
 ---
