@@ -295,7 +295,7 @@ def get_patient_analytics(patient_id: str):
     if not twin_engine or patient_id not in twin_engine.patients:
         raise HTTPException(status_code=404, detail="Patient profile not found.")
     try:
-        data = compute_patient_analytics(patient_id)
+        data = compute_patient_analytics(patient_id, engine=twin_engine)
         return data
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to compute analytics: {str(e)}")

@@ -65,8 +65,7 @@ export default function DoctorHeader({
         <div className="w-7 h-7 bg-slate-900 text-white flex items-center justify-center font-bold text-sm font-sans rounded-xs">
           ∞
         </div>
-        {/* OLD: <span className="font-sans text-2xl font-bold tracking-tight text-slate-900"> */}
-        <span className="font-serif text-2xl font-normal tracking-tight text-slate-900">
+                <span className="font-serif text-2xl font-normal tracking-tight text-slate-900">
           Kiko
         </span>
       </div>
@@ -74,8 +73,7 @@ export default function DoctorHeader({
       {/* Right: Unboxed Time & Date | Squared Profile Icon with Initials & Hover Logout */}
       <div className="flex items-center gap-4">
         {/* Time and date without the box */}
-        {/* OLD: <span className="font-mono-tech text-xs text-slate-500 font-medium tracking-tight"> */}
-        <span className="font-sans text-xs text-slate-500 font-medium tracking-tight">
+                <span className="font-sans text-xs text-slate-500 font-medium tracking-tight">
           {timeStr || "Sun, 18 Oct 2026 · 21:57:17"}
         </span>
 
@@ -103,8 +101,7 @@ export default function DoctorHeader({
           onMouseEnter={() => setDropdownOpen(true)}
           onMouseLeave={() => setDropdownOpen(false)}
         >
-          {/* OLD: className="w-8 h-8 bg-slate-900 text-white flex items-center justify-center font-mono-tech text-xs font-semibold rounded-none hover:bg-slate-800 transition-colors cursor-pointer select-none border border-slate-900 focus:outline-none" */}
-          <button
+                    <button
             type="button"
             className="w-8 h-8 bg-slate-900 text-white flex items-center justify-center font-sans text-xs font-semibold rounded-none hover:bg-slate-800 transition-colors cursor-pointer select-none border border-slate-900 focus:outline-none"
             aria-label="Clinician Profile Menu"
@@ -119,16 +116,14 @@ export default function DoctorHeader({
                 {/* Clinician Details */}
                 <div className="px-4 py-2 border-b border-slate-100">
                   <div className="flex items-center gap-2">
-                    {/* OLD: <div className="w-6 h-6 bg-slate-900 text-white flex items-center justify-center font-mono-tech text-[10px] font-semibold rounded-none"> */}
-                    <div className="w-6 h-6 bg-slate-900 text-white flex items-center justify-center font-sans text-[10px] font-semibold rounded-none">
+                                        <div className="w-6 h-6 bg-slate-900 text-white flex items-center justify-center font-sans text-[10px] font-semibold rounded-none">
                       KR
                     </div>
                     <div>
                       <p className="font-semibold text-slate-900 leading-tight">
                         Dr. Kavya Reddy, MD
                       </p>
-                      {/* OLD: <p className="text-[11px] font-mono-tech text-slate-500 mt-0.5"> */}
-                      <p className="text-[11px] font-sans text-slate-500 mt-0.5">
+                                            <p className="text-[11px] font-sans text-slate-500 mt-0.5">
                         Senior Endocrinologist
                       </p>
                     </div>
@@ -167,8 +162,7 @@ export default function DoctorHeader({
                         </span>
                         <span>Dashboard Tour</span>
                       </span>
-                      {/* PREVIOUS: <span className="font-mono-tech text-[10px] text-blue-600 font-semibold uppercase">6 Steps</span> */}
-                      <span className="font-mono-tech text-[10px] text-blue-600 font-semibold uppercase">
+                                            <span className="font-mono-tech text-[10px] text-blue-600 font-semibold uppercase">
                         8 Steps
                       </span>
                     </button>

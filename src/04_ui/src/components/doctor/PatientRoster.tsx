@@ -93,16 +93,54 @@ export default function PatientRoster({
     },
   ];
 
-  const getTrendIcon = (t: string) => {
+  
+  // SVG Trend Vector Icons (prevents OS font from rendering blue emoji boxes)
+  const renderTrendIcon = (t: string) => {
     switch (t) {
       case "RISING_FAST":
       case "RISING":
-        return "↗";
+        return (
+          <svg
+            className="w-3 h-3 inline-block stroke-current ml-0.5"
+            viewBox="0 0 24 24"
+            fill="none"
+            strokeWidth="2.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <line x1="7" y1="17" x2="17" y2="7" />
+            <polyline points="7 7 17 7 17 17" />
+          </svg>
+        );
       case "FALLING_FAST":
       case "FALLING":
-        return "↘";
+        return (
+          <svg
+            className="w-3 h-3 inline-block stroke-current ml-0.5"
+            viewBox="0 0 24 24"
+            fill="none"
+            strokeWidth="2.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <line x1="7" y1="7" x2="17" y2="17" />
+            <polyline points="17 7 17 17 7 17" />
+          </svg>
+        );
       default:
-        return "→";
+        return (
+          <svg
+            className="w-3 h-3 inline-block stroke-current ml-0.5"
+            viewBox="0 0 24 24"
+            fill="none"
+            strokeWidth="2.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <line x1="5" y1="12" x2="19" y2="12" />
+            <polyline points="12 5 19 12 12 19" />
+          </svg>
+        );
     }
   };
 
@@ -252,7 +290,7 @@ export default function PatientRoster({
                                 ? "text-amber-600"
                                 : "text-slate-700"
                             }`}>
-                              {getTrendIcon(p.trend)}
+                              {renderTrendIcon(p.trend)}
                             </span>
                           </div>
                         </div>

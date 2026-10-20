@@ -41,8 +41,7 @@ export default function MealResponseSection({
           </h2>
         </div>
         <div className="text-[11px] font-sans text-slate-500 uppercase tracking-wider">
-          {/* PREVIOUS: GLUCOSE IN MG/DL · AVERAGE RISE +{Math.round(averageRise || 128)} */}
-          GLUCOSE IN MG/DL{averageRise ? ` · AVERAGE RISE +${Math.round(averageRise)}` : ""}
+                    GLUCOSE IN MG/DL{averageRise ? ` · AVERAGE RISE +${Math.round(averageRise)}` : ""}
         </div>
       </div>
 
@@ -81,8 +80,7 @@ export default function MealResponseSection({
                     <td className="py-2.5 px-3 font-medium">{m.carbs_g} g</td>
                     {isT1D ? (
                       <td className="py-2.5 px-3 text-slate-700 font-medium">
-                        {/* PREVIOUS: {m.bolus_u && m.bolus_u > 0 ? `${m.bolus_u} U` : "4 U"} */}
-                        {m.bolus_u && m.bolus_u > 0 ? `${m.bolus_u} U` : "—"}
+                                                {m.bolus_u && m.bolus_u > 0 ? `${m.bolus_u} U` : "—"}
                       </td>
                     ) : (
                       <td className="py-2.5 px-3 text-slate-700 font-medium">

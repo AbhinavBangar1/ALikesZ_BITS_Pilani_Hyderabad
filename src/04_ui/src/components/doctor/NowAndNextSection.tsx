@@ -1,8 +1,7 @@
 "use client";
 
 import React, { useState, useMemo } from "react";
-import { TelemetryRecord } from "@/components/telemetry/TelemetryChart";
-import { TwinForecast } from "@/components/doctor/ForecastCard";
+import { TelemetryRecord, TwinForecast } from "@/types/clinical";
 
 interface NowAndNextSectionProps {
   stream: TelemetryRecord[];
@@ -16,6 +15,14 @@ export default function NowAndNextSection({
   currentGlucose,
 }: NowAndNextSectionProps) {
   const [selectedHorizon, setSelectedHorizon] = useState<"3H" | "6H" | "12H" | "24H">("6H");
+  const [hoveredPin, setHoveredPin] = useState<{
+    x: number;
+    y: number;
+    mealTag: string;
+    timeStr: string;
+    details: string;
+    glucose: number;
+  } | null>(null);
 
   // Take recent window based on selectedHorizon (5-min intervals: 12 per hour)
   const historyPoints = useMemo(() => {
@@ -75,21 +82,22 @@ export default function NowAndNextSection({
     ];
   }, [forecast, historyPoints, currentGlucose]);
 
-  // Generous layout dimensions ensuring ample vertical space (takes at least screenshot height)
+  
+  // EXPANSIVE FULL-HEIGHT DIMENSIONS: Takes full viewport height with generous vertical space
   const svgWidth = 1100;
-  const svgHeight = 400;
-  const margin = { top: 32, right: 105, bottom: 28, left: 105 };
-  const graphWidth = svgWidth - margin.left - margin.right;
+  const svgHeight = 620;
+  const margin = { top: 38, right: 105, bottom: 35, left: 105 };
+  const graphWidth = svgWidth - margin.left - margin.right; // 890
 
   // Vertical panes with generous breathing room
-  const cgmPaneTop = 32;
-  const cgmPaneHeight = 200;
+  const cgmPaneTop = 38;
+  const cgmPaneHeight = 360; // 360px (nearly double previous 200px!)
 
-  const hrPaneTop = cgmPaneTop + cgmPaneHeight + 25; // 257
-  const hrPaneHeight = 50;
+  const hrPaneTop = cgmPaneTop + cgmPaneHeight + 35; // 433
+  const hrPaneHeight = 65; // 65px (was 50px)
 
-  const stepPaneTop = hrPaneTop + hrPaneHeight + 18; // 325
-  const stepPaneHeight = 40;
+  const stepPaneTop = hrPaneTop + hrPaneHeight + 25; // 523
+  const stepPaneHeight = 45; // 45px (was 40px)
 
   // Fully dynamic scales: lowest - 10 and highest + 10 (never hardcoded)
   const { minG, maxG, glucoseTicks } = useMemo(() => {
@@ -223,42 +231,81 @@ export default function NowAndNextSection({
     return { ...maxPt, idx: maxIdx, timeStr };
   }, [historyPoints]);
 
-  // Meal & Bolus Event Pins in History
+  
+  // Clustered Meal & Bolus Events: Merges events within 30 min (6 ticks) into single dots
   const eventPins = useMemo(() => {
-    const pins: Array<{
+    const rawEvents: Array<{
       idx: number;
-      label: string;
+      carbs: number;
+      bolus: number;
       glucose: number;
-      timeStr: string;
+      timestamp: string;
     }> = [];
 
     historyPoints.forEach((pt, i) => {
       const carbs = pt.carb_input || 0;
       const bolus = pt.bolus_volume_delivered || 0;
       if (carbs > 0 || bolus > 0) {
-        const d = new Date(pt.timestamp);
-        const hr = d.getHours();
-        const mealTag = hr < 11 ? "Breakfast" : hr < 16 ? "Lunch" : "Dinner";
-
-        let label = "";
-        if (carbs > 0 && bolus > 0) {
-          label = `${mealTag} ${Math.round(carbs)} g · ${bolus} U`;
-        } else if (carbs > 0) {
-          label = `${mealTag} ${Math.round(carbs)} g`;
-        } else {
-          label = `Correction ${bolus} U`;
-        }
-
-        pins.push({
+        rawEvents.push({
           idx: i,
-          label,
+          carbs,
+          bolus,
           glucose: pt.glucose,
-          timeStr: `${String(hr).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`,
+          timestamp: pt.timestamp,
         });
       }
     });
 
-    return pins.slice(-3);
+    const clustered: Array<{
+      idx: number;
+      mealTag: string;
+      carbs: number;
+      bolus: number;
+      glucose: number;
+      timeStr: string;
+      details: string;
+    }> = [];
+
+    for (const ev of rawEvents) {
+      if (clustered.length > 0 && ev.idx - clustered[clustered.length - 1].idx <= 6) {
+        const last = clustered[clustered.length - 1];
+        last.carbs += ev.carbs;
+        last.bolus += ev.bolus;
+        const detailsArr = [];
+        if (last.carbs > 0) detailsArr.push(`${Math.round(last.carbs)}g carbs`);
+        if (last.bolus > 0) detailsArr.push(`${last.bolus.toFixed(1)}U bolus`);
+        last.details = detailsArr.join(" · ");
+      } else {
+        const d = new Date(ev.timestamp);
+        const hr = d.getHours();
+        const mealTag =
+          hr >= 5 && hr < 11
+            ? "Breakfast"
+            : hr >= 11 && hr < 16
+            ? "Lunch"
+            : hr >= 16 && hr < 18
+            ? "Snack"
+            : hr >= 18 && hr < 23
+            ? "Dinner"
+            : "Late Snack";
+
+        const detailsArr = [];
+        if (ev.carbs > 0) detailsArr.push(`${Math.round(ev.carbs)}g carbs`);
+        if (ev.bolus > 0) detailsArr.push(`${ev.bolus.toFixed(1)}U bolus`);
+
+        clustered.push({
+          idx: ev.idx,
+          mealTag,
+          carbs: ev.carbs,
+          bolus: ev.bolus,
+          glucose: ev.glucose,
+          timeStr: `${String(hr).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`,
+          details: detailsArr.length > 0 ? detailsArr.join(" · ") : "Meal Event",
+        });
+      }
+    }
+
+    return clustered.slice(-4);
   }, [historyPoints]);
 
   // Discrete 15-Minute Step Bouts (grouping 3 points of 5-min intervals)
@@ -313,7 +360,7 @@ export default function NowAndNextSection({
   }, [historyPoints, totalSlots, graphWidth, nowX, forecastWidth]);
 
   return (
-    <div className="w-full bg-white border-b border-slate-200 px-6 py-5">
+    <div className="w-full bg-white border-b border-slate-200 px-6 py-6 min-h-[calc(100vh-140px)] lg:min-h-[720px] flex flex-col justify-between">
       {/* Top Header & Horizon Selector */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
         <div>
@@ -359,12 +406,12 @@ export default function NowAndNextSection({
         </div>
       </div>
 
-      {/* Multi-Modal Chart Canvas with generous height matching user's requested space */}
-      <div className="w-full border border-slate-200 bg-white p-4">
-        <div className="w-full min-h-[380px]">
+      {/* Multi-Modal Chart Canvas with generous full-height space matching user's requested screen area */}
+      <div className="w-full flex-1 border border-slate-200 bg-white p-4 flex flex-col justify-center">
+        <div className="w-full min-h-[560px] flex items-center justify-center relative">
           <svg
             viewBox={`0 0 ${svgWidth} ${svgHeight}`}
-            className="w-full h-auto min-h-[380px] block select-none"
+            className="w-full h-auto min-h-[560px] max-h-[calc(100vh-180px)] block select-none"
           >
             <defs>
               <linearGradient id="forecastUncertaintyGrad" x1="0%" y1="0%" x2="0%" y2="100%">
@@ -600,43 +647,64 @@ export default function NowAndNextSection({
               </g>
             )}
 
-            {/* Event Pins in History (Connected to curve with drop lines) */}
+            
+            {/* NEW: Clean Interactive Meal Dots Directly on the Glucose Curve with Hover Reveal */}
             {eventPins.map((pin, idx) => {
               const x = getXHistory(pin.idx);
               const curveY = getYGlucose(pin.glucose);
-              const pinBoxY = cgmPaneTop + cgmPaneHeight - 24;
+              const isHovered = hoveredPin && hoveredPin.x === x;
+
               return (
-                <g key={idx}>
-                  {/* Vertical drop line connecting curve to pin box */}
+                <g
+                  key={idx}
+                  className="cursor-pointer"
+                  onMouseEnter={() =>
+                    setHoveredPin({
+                      x,
+                      y: curveY,
+                      mealTag: pin.mealTag,
+                      timeStr: pin.timeStr,
+                      details: pin.details,
+                      glucose: pin.glucose,
+                    })
+                  }
+                  onMouseLeave={() => setHoveredPin(null)}
+                >
+                  {/* Subtle vertical dashed drop line down to axis */}
                   <line
                     x1={x}
                     y1={curveY}
                     x2={x}
-                    y2={pinBoxY}
-                    stroke="#94A3B8"
-                    strokeWidth="0.8"
+                    y2={stepPaneTop + stepPaneHeight}
+                    stroke="#D97706"
+                    strokeWidth={isHovered ? "1.5" : "1"}
+                    strokeDasharray="2 3"
+                    opacity={isHovered ? 0.9 : 0.45}
                   />
-                  {/* Pin Box */}
-                  <rect
-                    x={x - 48}
-                    y={pinBoxY}
-                    width="96"
-                    height="18"
-                    fill="#FFFFFF"
-                    stroke="#CBD5E1"
-                    strokeWidth="0.8"
+
+                  {/* Invisible wide hit target for effortless hovering */}
+                  <circle cx={x} cy={curveY} r="16" fill="transparent" />
+
+                  {/* Ambient outer pulse ring */}
+                  <circle
+                    cx={x}
+                    cy={curveY}
+                    r={isHovered ? "9" : "6.5"}
+                    fill="#F59E0B"
+                    fillOpacity={isHovered ? "0.35" : "0.2"}
+                    className="transition-all duration-150"
                   />
-                  <text
-                    x={x}
-                    y={pinBoxY + 12}
-                    fill="#334155"
-                    fontSize="7.5"
-                    fontFamily="sans-serif"
-                    fontWeight="500"
-                    textAnchor="middle"
-                  >
-                    {pin.label}
-                  </text>
+
+                  {/* Clean amber dot directly on the glucose curve */}
+                  <circle
+                    cx={x}
+                    cy={curveY}
+                    r={isHovered ? "5.5" : "4"}
+                    fill="#D97706"
+                    stroke="#FFFFFF"
+                    strokeWidth="2"
+                    className="transition-all duration-150"
+                  />
                 </g>
               );
             })}
@@ -733,6 +801,17 @@ export default function NowAndNextSection({
               </g>
             )}
 
+            {/* Boundary Box (Black) around Glucose Graph */}
+            <rect
+              x={margin.left}
+              y={cgmPaneTop}
+              width={graphWidth}
+              height={cgmPaneHeight}
+              fill="none"
+              stroke="#000000"
+              strokeWidth="1.2"
+            />
+
             {/* ── HEART RATE PANE ───────────────────────────────────────── */}
             <text
               x={margin.left - 12}
@@ -745,21 +824,15 @@ export default function NowAndNextSection({
             >
               HEART RATE BPM
             </text>
-            <line
-              x1={margin.left}
-              y1={hrPaneTop}
-              x2={margin.left + graphWidth}
-              y2={hrPaneTop}
-              stroke="#E2E8F0"
-              strokeWidth="0.8"
-            />
-            <line
-              x1={margin.left}
-              y1={hrPaneTop + hrPaneHeight}
-              x2={margin.left + graphWidth}
-              y2={hrPaneTop + hrPaneHeight}
-              stroke="#E2E8F0"
-              strokeWidth="0.8"
+            {/* Boundary Box (Black) around Heart Rate Graph */}
+            <rect
+              x={margin.left}
+              y={hrPaneTop}
+              width={graphWidth}
+              height={hrPaneHeight}
+              fill="none"
+              stroke="#000000"
+              strokeWidth="1.2"
             />
             {hrTicks.map((tick) => (
               <text
@@ -799,13 +872,15 @@ export default function NowAndNextSection({
             >
               STEPS / 15 MIN
             </text>
-            <line
-              x1={margin.left}
-              y1={stepPaneTop + stepPaneHeight}
-              x2={margin.left + graphWidth}
-              y2={stepPaneTop + stepPaneHeight}
-              stroke="#CBD5E1"
-              strokeWidth="1"
+            {/* Boundary Box (Black) around Steps Graph */}
+            <rect
+              x={margin.left}
+              y={stepPaneTop}
+              width={graphWidth}
+              height={stepPaneHeight}
+              fill="none"
+              stroke="#000000"
+              strokeWidth="1.2"
             />
 
             {/* Discrete 15-Minute Step Bars (Centered at bouts) */}
@@ -850,6 +925,69 @@ export default function NowAndNextSection({
                 </text>
               </g>
             ))}
+
+            {/* Floating Interactive Hover Tooltip Popover for Meal Event Dot */}
+            {hoveredPin && (
+              <g
+                transform={`translate(${hoveredPin.x}, ${Math.max(cgmPaneTop + 8, hoveredPin.y - 66)})`}
+                className="pointer-events-none"
+              >
+                {/* Tooltip Card Box */}
+                <rect
+                  x="-75"
+                  y="0"
+                  width="150"
+                  height="54"
+                  rx="3"
+                  fill="#0F172A"
+                  fillOpacity="0.97"
+                  stroke="#334155"
+                  strokeWidth="1"
+                  filter="drop-shadow(0 6px 12px rgba(0,0,0,0.3))"
+                />
+                {/* Pointer triangle */}
+                <polygon
+                  points="-6,54 6,54 0,60"
+                  fill="#0F172A"
+                  fillOpacity="0.97"
+                />
+                {/* Meal Name & Time */}
+                <text
+                  x="0"
+                  y="16"
+                  fill="#FFFFFF"
+                  fontSize="10"
+                  fontWeight="bold"
+                  textAnchor="middle"
+                  fontFamily="sans-serif"
+                >
+                  {hoveredPin.mealTag} · {hoveredPin.timeStr}
+                </text>
+                {/* Carbs & Bolus */}
+                <text
+                  x="0"
+                  y="32"
+                  fill="#FBBF24"
+                  fontSize="9"
+                  fontWeight="600"
+                  textAnchor="middle"
+                  fontFamily="sans-serif"
+                >
+                  {hoveredPin.details}
+                </text>
+                {/* Glucose at event */}
+                <text
+                  x="0"
+                  y="45"
+                  fill="#94A3B8"
+                  fontSize="8.5"
+                  textAnchor="middle"
+                  fontFamily="sans-serif"
+                >
+                  Glucose at event: {Math.round(hoveredPin.glucose)} mg/dL
+                </text>
+              </g>
+            )}
           </svg>
         </div>
       </div>

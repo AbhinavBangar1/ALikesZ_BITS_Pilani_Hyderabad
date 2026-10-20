@@ -41,8 +41,7 @@ export default function HeroKPISection({
               {Math.round(currentGlucose)}
             </span>
             <span className="text-xs text-slate-500 font-sans">mg/dL</span>
-            {/* <span className="text-amber-500 font-bold text-lg leading-none ml-1">↗</span> */}
-          </div>
+                      </div>
           <div>
             <div className="flex items-center gap-1.5 text-[10px] font-sans font-bold uppercase tracking-wider text-slate-600 mb-0.5">
               <span className="w-1.5 h-1.5 rounded-full bg-blue-600 inline-block" />

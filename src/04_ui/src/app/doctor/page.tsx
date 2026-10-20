@@ -3,11 +3,7 @@
 import React, { useState, useEffect } from "react";
 import DoctorHeader from "@/components/doctor/DoctorHeader";
 import PatientRoster, { Patient } from "@/components/doctor/PatientRoster";
-import PatientProfileCard, { PatientEHR } from "@/components/doctor/PatientProfileCard";
-import AdverseRiskCard from "@/components/doctor/AdverseRiskCard";
-import ForecastCard, { TwinForecast } from "@/components/doctor/ForecastCard";
-import TelemetryChart, { TelemetryRecord, LiveHrPoint } from "@/components/telemetry/TelemetryChart";
-import CDSSActionCard, { CDSSAlert } from "@/components/doctor/CDSSActionCard";
+import { PatientEHR, TwinForecast, TelemetryRecord } from "@/types/clinical";
 import DashboardTutorial, { TutorialStep } from "@/components/common/DashboardTutorial";
 
 // New Redesigned Clinical Dashboard Sections
@@ -19,53 +15,6 @@ import TypicalDaySection from "@/components/doctor/TypicalDaySection";
 import MealResponseSection from "@/components/doctor/MealResponseSection";
 import ForecastAccuracySection from "@/components/doctor/ForecastAccuracySection";
 
-/*
-PREVIOUS 6-STEP TUTORIAL (COMMENTED FOR EASY REVERT):
-const DOCTOR_TUTORIAL_STEPS_OLD: TutorialStep[] = [
-  {
-    targetId: "tutorial-roster",
-    title: "1. Clinical Triage Roster",
-    badge: "PATIENT COHORT",
-    description:
-      "Displays all cohort patients categorized dynamically by risk severity (Critical → High → Moderate). Glucose readings and status synchronize every 15 seconds. Selecting any patient loads their active physiological digital twin.",
-  },
-  {
-    targetId: "tutorial-header",
-    title: "2. Patient Baseline Phenotype",
-    badge: "EHR & BIOMETRICS",
-    description:
-      "Displays static medical baseline metrics tailored by diabetes type: ISF, ICR, Basal rate, HbA1c, BMI, and duration for Type 1; HOMA-IR, HOMA-β, and Fasting glucose for Type 2.",
-  },
-  {
-    targetId: "tutorial-hero",
-    title: "3. Real-Time Telemetry KPIs",
-    badge: "STREAMING BIO-IOT",
-    description:
-      "4 hero cards tracking Current CGM with rate-of-change velocity (mg/dL/min), live cardiac pulse, steps in the last hour, and active Therapy Context (Insulin on Board for T1D or Last Meal for T2D).",
-  },
-  {
-    targetId: "tutorial-now-next",
-    title: "4. Measured & Predicted Glucose",
-    badge: "MODEL 1 TRAJECTORY",
-    description:
-      "Synchronized multi-modal chart showing historical continuous glucose, vertical reference line, future multi-horizon forecast with uncertainty confidence envelope, meal events, and aligned cardiac/step panes.",
-  },
-  {
-    targetId: "tutorial-glycaemic",
-    title: "5. Longitudinal Glycaemic Summary",
-    badge: "14-DAY EHR SENSOR USE",
-    description:
-      "International consensus metrics: Average Glucose, Time in Range (TIR), Time Below 70 (TBR), Time Above 180 (TAR), and Glucose Coefficient of Variation (CV%), followed by a continuous stacked AGP bar.",
-  },
-  {
-    targetId: "tutorial-patterns",
-    title: "6. Ambulatory Glucose Profile & Meals",
-    badge: "AGP MODAL & MEALS",
-    description:
-      "Standard 24-hour Ambulatory Glucose Profile (AGP) modal day curves with 5th, 25th, median (50th), 75th, and 95th percentiles, followed by post-prandial meal response tracking and twin validation.",
-  },
-];
-*/
 
 const DOCTOR_TUTORIAL_STEPS: TutorialStep[] = [
   {
@@ -136,12 +85,10 @@ export default function DoctorPortal() {
   const [ehr, setEhr] = useState<PatientEHR | null>(null);
   const [stream, setStream] = useState<TelemetryRecord[]>([]);
   const [forecast, setForecast] = useState<TwinForecast | null>(null);
-  const [cdssAlerts, setCdssAlerts] = useState<CDSSAlert[]>([]);
   const [analytics, setAnalytics] = useState<any>(null);
   const [liveStreaming, setLiveStreaming] = useState<boolean>(true);
   const [liveBpm, setLiveBpm] = useState<number | undefined>(undefined);
   const [liveRr, setLiveRr] = useState<number | undefined>(undefined);
-  const [liveHrHistory, setLiveHrHistory] = useState<LiveHrPoint[]>([]);
   const [tutorialOpen, setTutorialOpen] = useState<boolean>(false);
 
   // Check first-time visit to auto-open tutorial
@@ -166,7 +113,6 @@ export default function DoctorPortal() {
         if (res.ok) {
           const json = await res.json();
           if (json.data && json.data.length > 0) {
-            setLiveHrHistory(json.data);
             const latest = json.data[json.data.length - 1];
             setLiveBpm(latest.heart_rate);
             setLiveRr(latest.rr_ms);
@@ -188,10 +134,7 @@ export default function DoctorPortal() {
             const latest = json.data[json.data.length - 1];
             setLiveBpm(latest.heart_rate);
             setLiveRr(latest.rr_ms);
-            setLiveHrHistory((prev) => {
-              const next = [...prev, latest];
-              return next.slice(-60);
-            });
+
           }
         }
       } catch (err) {
@@ -224,7 +167,7 @@ export default function DoctorPortal() {
   // Fetch detail for selected patient
   const fetchPatientDetail = async (id: string) => {
     try {
-      const [ehrRes, streamRes, forecastRes, cdssRes, analyticsRes] = await Promise.all([
+      const [ehrRes, streamRes, forecastRes, analyticsRes] = await Promise.all([
         fetch(`http://127.0.0.1:8000/api/patient/${id}/ehr`),
         fetch(`http://127.0.0.1:8000/api/patient/${id}/stream?points=144`),
         fetch(`http://127.0.0.1:8000/api/patient/${id}/twin-forecast`),
@@ -238,10 +181,6 @@ export default function DoctorPortal() {
         setStream(streamData.data || []);
       }
       if (forecastRes.ok) setForecast(await forecastRes.json());
-      if (cdssRes.ok) {
-        const cdssData = await cdssRes.json();
-        setCdssAlerts(cdssData.alerts || []);
-      }
       if (analyticsRes.ok) {
         const analyticsData = await analyticsRes.json();
         setAnalytics(analyticsData);
@@ -275,11 +214,10 @@ export default function DoctorPortal() {
           body: JSON.stringify({}),
         });
 
-        // Pull latest stream, forecast, CDSS alerts, and analytics
-        const [streamRes, forecastRes, cdssRes, analyticsRes] = await Promise.all([
+        // Pull latest stream, forecast, and analytics
+        const [streamRes, forecastRes, analyticsRes] = await Promise.all([
           fetch(`http://127.0.0.1:8000/api/patient/${selectedId}/stream?points=144`),
           fetch(`http://127.0.0.1:8000/api/patient/${selectedId}/twin-forecast`),
-          fetch(`http://127.0.0.1:8000/api/patient/${selectedId}/cdss`),
           fetch(`http://127.0.0.1:8000/api/patient/${selectedId}/analytics`),
         ]);
 
@@ -288,10 +226,6 @@ export default function DoctorPortal() {
           setStream(streamData.data || []);
         }
         if (forecastRes.ok) setForecast(await forecastRes.json());
-        if (cdssRes.ok) {
-          const cdssData = await cdssRes.json();
-          setCdssAlerts(cdssData.alerts || []);
-        }
         if (analyticsRes.ok) {
           const analyticsData = await analyticsRes.json();
           setAnalytics(analyticsData);
@@ -378,41 +312,6 @@ export default function DoctorPortal() {
     }
   };
 
-  // CDSS Action Handlers
-  const handleAcknowledgeAlert = async (patternId: string) => {
-    try {
-      await fetch(`http://127.0.0.1:8000/api/patient/${selectedId}/cdss/acknowledge`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pattern_id: patternId }),
-      });
-      const res = await fetch(`http://127.0.0.1:8000/api/patient/${selectedId}/cdss`);
-      if (res.ok) {
-        const cdssData = await res.json();
-        setCdssAlerts(cdssData.alerts || []);
-      }
-    } catch (err) {
-      console.error("Failed to acknowledge CDSS alert:", err);
-    }
-  };
-
-  const handleDismissAlert = async (patternId: string) => {
-    try {
-      await fetch(`http://127.0.0.1:8000/api/patient/${selectedId}/cdss/dismiss`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pattern_id: patternId }),
-      });
-      const res = await fetch(`http://127.0.0.1:8000/api/patient/${selectedId}/cdss`);
-      if (res.ok) {
-        const cdssData = await res.json();
-        setCdssAlerts(cdssData.alerts || []);
-      }
-    } catch (err) {
-      console.error("Failed to dismiss CDSS alert:", err);
-    }
-  };
-
   return (
     <div className="h-screen overflow-hidden bg-white text-slate-900 flex flex-col font-sans antialiased">
       {/* Top Header: Logo + 'Kiko' | Unboxed Timestamp | Squared Profile Icon with Initials & Hover Logout */}
@@ -488,11 +387,12 @@ export default function DoctorPortal() {
             />
           </div>
 
-          {/* 5. Section 03: Typical day (Ambulatory Glucose Profile) */}
+          {/* 5. Section 03: Typical day (Ambulatory Glucose Profile & 4 Diurnal Tabs) */}
           <div id="tutorial-patterns">
             <TypicalDaySection
               agpData={analytics?.agp_profile}
               agpNote={analytics?.agp_note}
+              typicalDay={analytics?.typical_day}
             />
           </div>
 
@@ -516,82 +416,8 @@ export default function DoctorPortal() {
             />
           </div>
 
-          {/*
-          =======================================================
-          PREVIOUS DECK LAYOUT (COMMENTED FOR EASY REVERT):
-          =======================================================
-          <div className="hidden">
-            {/* Deck 1: Patient Profile (62.5%) | Adverse Event Risk (37.5%) *\/}
-            <div className="flex flex-col lg:flex-row border-b border-slate-200 shrink-0">
-              <div
-                id="tutorial-profile-old"
-                className="w-full lg:w-[62.5%] border-r border-slate-200 flex flex-col"
-              >
-                <PatientProfileCard
-                  ehr={ehr}
-                  currentGlucose={forecast?.current_glucose}
-                  stream={stream}
-                  liveBpm={liveBpm}
-                />
-              </div>
-              <div
-                id="tutorial-risk-old"
-                className="w-full lg:w-[37.5%] flex flex-col"
-              >
-                <AdverseRiskCard
-                  adverseRiskProb={forecast?.adverse_risk_prob}
-                  hyperRiskHigh={
-                    (forecast?.forecast?.t_plus_60min || 0) > 220 ||
-                    (forecast?.current_glucose || 0) > 220
-                  }
-                  currentGlucose={forecast?.current_glucose}
-                  riskTier={
-                    patients.find((p) => p.patient_id === selectedId)?.risk_tier ||
-                    ehr?.clinical_risk_tier
-                  }
-                />
-              </div>
-            </div>
 
-            {/* Deck 2: Live Telemetry Chart (62.5%) | 2-Hour Predictive Trajectory (37.5%) *\/}
-            <div className="flex flex-col lg:flex-row border-b border-slate-200 shrink-0">
-              <div
-                id="tutorial-telemetry-old"
-                className="w-full lg:w-[62.5%] border-r border-slate-200 flex flex-col"
-              >
-                <TelemetryChart
-                  stream={stream}
-                  liveHrHistory={liveHrHistory}
-                  currentGlucose={forecast?.current_glucose}
-                  liveBpm={liveBpm}
-                  liveRr={liveRr}
-                />
-              </div>
-              <div
-                id="tutorial-trajectory-old"
-                className="w-full lg:w-[37.5%] flex flex-col"
-              >
-                <ForecastCard
-                  forecast={forecast}
-                  stream={stream}
-                />
-              </div>
-            </div>
-
-            {/* Deck 3: Clinical Decision Support System (CDSS) Action Center *\/}
-            <div
-              id="tutorial-cdss-old"
-              className="w-full flex flex-col shrink-0"
-            >
-              <CDSSActionCard
-                patientId={selectedId}
-                alerts={cdssAlerts}
-                onAcknowledge={handleAcknowledgeAlert}
-                onDismiss={handleDismissAlert}
-              />
-            </div>
-          </div>
-          */}
+          
         </section>
       </main>
 
