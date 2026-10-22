@@ -4,7 +4,8 @@
 **Project Title:** Kiko: Multimodal Predictive Physiological Digital Twin for Personalized Glycemic Trajectory Simulation and Adverse-Event Forecasting in Type 1 and Type 2 Diabetes  
 **Team:** ALikesZ  
 **Institution:** Birla Institute of Technology & Science, Pilani – Hyderabad Campus ,Hyderabad ,Telangana, India
-
+* **Project Presentation Deck :** [View Presentation Deck](https://docs.google.com/presentation/d/1lPM6sfZejjihHP4ddRjP_ECT9UBrr0Zq/edit?usp=drive_link&ouid=108613752592286389902&rtpof=true&sd=true)
+* **Prototype Demo Video:** [Google Drive Video Link](https://drive.google.com/file/d/1I540L098TtiZJSHpO7OZ7ab2jlJD5HVz/view?usp=drive_link)
 ---
 
 ## Team Details
@@ -142,17 +143,18 @@ In strict compliance with India's **Digital Personal Data Protection (DPDP) Act,
 
 * Simulates physiological insulin-carbohydrate dynamics using differential compartmental equations:
 
-  $$
-  \frac{dC_{\text{gut}}}{dt} = -\kappa_{\text{abs}} \cdot C_{\text{gut}}(t) + \text{Meal}(t)
-  $$
+$$
+\frac{dC_{\text{gut}}}{dt} = -\kappa_{\text{abs}} \cdot C_{\text{gut}}(t) + \text{Meal}(t)
+$$
 
-  $$
-  \frac{d\text{IOB}}{dt} = -\frac{\text{IOB}(t)}{\tau_{\text{insulin}}} + \text{Bolus}(t)
-  $$
+$$
+\frac{d\text{IOB}}{dt} = -\frac{\text{IOB}(t)}{\tau_{\text{insulin}}} + \text{Bolus}(t)
+$$
 
-  $$
-  \Delta G(t) = \left( \frac{\kappa_{\text{abs}} \cdot C_{\text{gut}}(t)}{\text{ICR}} - \frac{\text{IOB}(t)}{\tau_{\text{insulin}}} \right) \cdot \text{ISF} - \gamma_{\text{exercise}} \cdot \text{Steps}(t)
-  $$
+$$
+\Delta G(t) = \left( \frac{\kappa_{\text{abs}} \cdot C_{\text{gut}}(t)}{\text{ICR}} - \frac{\text{IOB}(t)}{\tau_{\text{insulin}}} \right) \cdot \text{ISF} - \gamma_{\text{exercise}} \cdot \text{Steps}(t)
+$$
+
 * Solves active Insulin-on-Board (IOB) decay across a standard 3-to-4 hour exponential curve.
 * Powers Kiko's counterfactual "What-If" sandbox by simulating the net physiological shift before action execution.
 
@@ -288,8 +290,8 @@ python src/02_twin_engine/evaluate_submission_metrics.py
 * **Architecture Diagram (PNG):** [docs/kiko_architecture_diagram.png](docs/kiko_architecture_diagram.png)
 * **Editable Architecture Source (LaTeX/TikZ):** [docs/kiko_architecture_diagram.tex](docs/kiko_architecture_diagram.tex)
 * **Open-Source License:** [MIT License](LICENSE)
-* **Project Presentation Deck (PPTX/PDF):**
-* **Prototype Demo Video :**
+* **Project Presentation Deck :** [View Presentation Deck](https://docs.google.com/presentation/d/1lPM6sfZejjihHP4ddRjP_ECT9UBrr0Zq/edit?usp=drive_link&ouid=108613752592286389902&rtpof=true&sd=true)
+* **Prototype Demo Video:** [Google Drive Video Link](https://drive.google.com/file/d/1I540L098TtiZJSHpO7OZ7ab2jlJD5HVz/view?usp=drive_link)
 
 ---
 
