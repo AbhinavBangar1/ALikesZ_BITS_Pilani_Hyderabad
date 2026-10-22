@@ -5,7 +5,7 @@
 **Team:** ALikesZ  
 **Institution:** Birla Institute of Technology & Science, Pilani – Hyderabad Campus ,Hyderabad ,Telangana, India
 * **Project Presentation Deck :** [View Presentation Deck](https://docs.google.com/presentation/d/1lPM6sfZejjihHP4ddRjP_ECT9UBrr0Zq/edit?usp=drive_link&ouid=108613752592286389902&rtpof=true&sd=true)
-* **Prototype Demo Video:** [Google Drive Video Link](https://drive.google.com/file/d/1I540L098TtiZJSHpO7OZ7ab2jlJD5HVz/view?usp=drive_link)
+* **Prototype Demo Video:** [Youtube video link](https://youtu.be/1hye7fSMh_o)
 ---
 
 ## Team Details
@@ -291,7 +291,7 @@ python src/02_twin_engine/evaluate_submission_metrics.py
 * **Editable Architecture Source (LaTeX/TikZ):** [docs/kiko_architecture_diagram.tex](docs/kiko_architecture_diagram.tex)
 * **Open-Source License:** [MIT License](LICENSE)
 * **Project Presentation Deck :** [View Presentation Deck](https://docs.google.com/presentation/d/1lPM6sfZejjihHP4ddRjP_ECT9UBrr0Zq/edit?usp=drive_link&ouid=108613752592286389902&rtpof=true&sd=true)
-* **Prototype Demo Video:** [Google Drive Video Link](https://drive.google.com/file/d/1I540L098TtiZJSHpO7OZ7ab2jlJD5HVz/view?usp=drive_link)
+* **Prototype Demo Video:** [Youtube video link](https://youtu.be/1hye7fSMh_o)
 
 ---
 
