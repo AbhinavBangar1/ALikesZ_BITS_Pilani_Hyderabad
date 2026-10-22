@@ -39,7 +39,7 @@ The prototype demonstrates how static health information and dynamic sensor sign
 
 ---
 
-## Live Prototype
+## Prototype
 
 * **Doctor Clinician Dashboard:** [http://localhost:3000/doctor](http://localhost:3000/doctor) *(Local)*
 * **Patient Self-Management Portal:** [http://localhost:3000/patient](http://localhost:3000/patient) *(Local)*
